@@ -290,7 +290,7 @@ local function PaintWindowBorder(host, d)
     if style then
         local pixelArt = EUI._pixelArtBorders[style]
         local opacity = (d.windowItemQuality or (d.windowOpaqueBorder and WSkin.IsModeTabBorderStyle(style))) and 1 or nil
-        local pixelSampling = pixelArt and (d.windowModeTab or d.windowLeftPaneBg ~= nil)
+        local pixelSampling = pixelArt and (d.windowModeTab or d.windowDividers ~= nil)
         local border, size, key, color, px, texture = EUI._applyBlizzardConfiguredBorder(owner, "blizzWin", 1,
             d.windowBorderTint, opacity, d.windowModeTab and pixelArt, pixelSampling)
         if not border then return end

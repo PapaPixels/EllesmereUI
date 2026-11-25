@@ -1638,8 +1638,8 @@ local function PaintHorizontalCompanion(line, style, thickness, pixel)
 end
 
 local accentBorderHooked
-function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect)
-    local right = frame.RightPaneHost
+function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, headerOnly)
+    local right = not headerOnly and frame.RightPaneHost
     if not topBar then return end
     if not accentBorderHooked then
         accentBorderHooked = true
@@ -1656,7 +1656,8 @@ function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect)
     local seam = right and CreateFrame("Frame", nil, right)
     local vertical = seam and seam:CreateTexture(nil, "OVERLAY")
     local backgrounds = { modelBg, sidebarBg }
-    local skinModeTabs, tabClip = BuildModeTabSkin(frame, ns.WSkin, inspect)
+    local skinModeTabs, tabClip
+    if not headerOnly then skinModeTabs, tabClip = BuildModeTabSkin(frame, ns.WSkin, inspect) end
 
     local border, style, size, key, color, px, dock
     local dockSeam, dockLine

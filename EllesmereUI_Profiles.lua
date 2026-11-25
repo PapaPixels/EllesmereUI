@@ -2256,6 +2256,7 @@ do
         "reskinProfessions", "reskinWorldMap", "reskinGuild", "reskinCalendar",
         "reskinAchievements", "reskinMail", "reskinCatalyst", "reskinSocket",
         "reskinItemUpgrade", "reskinLoot", "lootIconBorder", "lootWindowBorderQualityColor", "reskinLootToast", "lootToastQualityStrip",
+        "foreverLootGlobalBorder", "foreverLootQualityBorder", "foreverLootQualityLabel",
         "lootToastQualityStripMoney", "lootToastScale",
         "reskinBNetToast",
         "reskinLootRoll", "reskinLootHistory", "reskinGroupInvite",

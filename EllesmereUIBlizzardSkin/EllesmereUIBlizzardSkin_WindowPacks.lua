@@ -11766,8 +11766,27 @@ end
 -------------------------------------------------------------------------------
 do
 local lootSkinned = false
+local forever = EllesmereUI.IS_FOREVER
 local LOOT_WHITE = { r = 1, g = 1, b = 1 }
 local lootQualityRGB = { r = 1, g = 1, b = 1 }
+
+local function UsesLegacyLootBorder(db)
+    return not db.foreverLootGlobalBorder and (db.lootWindowBorderTexture or db.lootWindowBorderColorMode
+        or db.lootWindowBorderQualityColor or db.lootIconBorder ~= nil)
+end
+
+function ns.AdoptForeverLootBorder()
+    if forever and UsesLegacyLootBorder(EllesmereUIDB) then
+        EllesmereUIDB.foreverLootGlobalBorder = true
+        return true
+    end
+end
+
+function ns.ForeverLootQualityBorder()
+    local db = EllesmereUIDB
+    if db.foreverLootQualityBorder ~= nil then return db.foreverLootQualityBorder end
+    return db.lootWindowBorderColorMode == "quality"
+end
 
 -- The best quality among the slots still holding loot (a looted slot reads type None);
 -- nil with none left or no loot at all (the Edit Mode preview).
@@ -11784,9 +11803,9 @@ end
 
 -- Quality mode's color for a best quality: Uncommon and up in their quality color, else (Poor
 -- or Common only, or no loot) the Quality swatch's own color. Refills one table, read at once.
-local function LootQualityColor(best)
+local function LootQualityColor(best, fallback)
     if not best or best < Enum.ItemQuality.Uncommon then
-        return EllesmereUIDB.lootWindowBorderQualityColor or LOOT_WHITE
+        return fallback or EllesmereUIDB.lootWindowBorderQualityColor or LOOT_WHITE
     end
     lootQualityRGB.r, lootQualityRGB.g, lootQualityRGB.b = C_Item.GetItemQualityColor(best)
     return lootQualityRGB
@@ -11805,7 +11824,7 @@ end
 -- Registered only while the window shows in Quality mode; the loot's close lets it go.
 local ApplyLootBorder
 local lootQualityWatch, lootPaintedBest
-local function SyncLootQualityWatch(on)
+local function SyncLootQualityWatch(on, watchChanges)
     if on then
         if not lootQualityWatch then
             lootQualityWatch = CreateFrame("Frame")
@@ -11819,6 +11838,11 @@ local function SyncLootQualityWatch(on)
         end
         lootQualityWatch:RegisterEvent("LOOT_SLOT_CLEARED")
         lootQualityWatch:RegisterEvent("LOOT_CLOSED")
+        if watchChanges then
+            lootQualityWatch:RegisterEvent("LOOT_SLOT_CHANGED")
+        elseif forever then
+            lootQualityWatch:UnregisterEvent("LOOT_SLOT_CHANGED")
+        end
     elseif lootQualityWatch then
         lootQualityWatch:UnregisterAllEvents()
     end
@@ -11828,6 +11852,28 @@ end
 ApplyLootBorder = function(f)
     local d = GetFFD(f)
     local db = EllesmereUIDB
+    if forever and not UsesLegacyLootBorder(db) then
+        d.lootGlobalBorder = true
+        if d.lootBorderOn then
+            EllesmereUI._hideBlizzardConfiguredBorder(f)
+            d.lootBorderOn = nil
+        end
+        local quality = db.blizzWinBorderTexture and ns.ForeverLootQualityBorder()
+        local override
+        if quality then
+            lootPaintedBest = BestLootQuality()
+            override = LootQualityColor(lootPaintedBest, db.blizzWinBorderColor or LOOT_WHITE)
+        end
+        local host = d.atlasBorderFrame
+        host:Show()
+        WSkin.SetWindowBorderTint(host, override)
+        SyncLootQualityWatch(quality and f:IsShown(), true)
+        return
+    end
+    if d.lootGlobalBorder then
+        d.lootGlobalBorder = nil
+        WSkin.SetWindowBorderTint(d.atlasBorderFrame, nil)
+    end
     if db and (db.blizzWinBorderTexture or db.lootWindowBorderTexture) then
         local quality = db.lootWindowBorderColorMode == "quality"
         local override
@@ -11858,13 +11904,64 @@ ApplyLootBorder = function(f)
     end
 end
 
+local function PaintForeverLootIcon(row, item, icon, pp, data)
+    local element = row.GetElementData and row:GetElementData()
+    local quality = element and element.quality
+    if element and element.slotIndex and GetLootSlotType(element.slotIndex) == Enum.LootSlotType.Item then
+        quality = select(5, GetLootSlotInfo(element.slotIndex)) or quality
+    end
+    local r, g, b = C_Item.GetItemQualityColor(quality or Enum.ItemQuality.Common)
+    if item.IconBorder then item.IconBorder:SetAlpha(0) end
+    if data.qBorder then data.qBorder:Hide() end
+    local host, tint = data.globalLootBorder, data.globalLootTint
+    if host then
+        host:Show()
+        if tint.r ~= r or tint.g ~= g or tint.b ~= b then
+            tint.r, tint.g, tint.b = r, g, b
+            pp.SetBorderColor(host, r, g, b, 1)
+            WSkin.SetWindowBorderTint(host, tint)
+        end
+    else
+        host = CreateFrame("Frame", nil, item)
+        host:SetAllPoints(icon)
+        host:SetFrameLevel(item:GetFrameLevel() + 2)
+        tint = { r = r, g = g, b = b }
+        data.globalLootBorder, data.globalLootTint = host, tint
+        local edge = pp.CreateBorder(host, r, g, b, 1, 1, "OVERLAY", 7)
+        WSkin.RegisterWindowIconBorder(host, edge, tint)
+        if row.Init then
+            hooksecurefunc(row, "Init", function(self)
+                if self:IsForbidden() or WSkin.GetStyle("loot") == "off" then return end
+                if not UsesLegacyLootBorder(EllesmereUIDB) then
+                    PaintForeverLootIcon(self, item, icon, pp, data)
+                end
+            end)
+        end
+    end
+    WSkin.RegisterWindowIcon(icon, host)
+end
+
 local function Skin_Loot()
     local f = _G.LootFrame
-    if not f then return end
+    if not f or (forever and f:IsForbidden()) then return end
     lootSkinned = true
     WSkin.Shell("loot", f)
     WSkin.RemovePortrait(f)
     WSkin.CommonChrome(f, "LootFrame")
+    if forever then
+        local d = GetFFD(f)
+        if not d.lootHeader then
+            d.lootHeader = ns.ForeverBuildDividers(f, d.topBar, nil, nil, nil, true)
+            WSkin.SetWindowBorderDetails(f, nil, nil, d.lootHeader, true)
+            local close = f.CloseButton or (f.TitleContainer and f.TitleContainer.CloseButton)
+                or f.ClosePanelButton or _G.LootFrameCloseButton
+            local cross = close and GetFFD(close).x
+            if cross then
+                cross:ClearAllPoints()
+                cross:SetPoint("CENTER", close, "CENTER", 0, -1)
+            end
+        end
+    end
     if f.NineSlice then WSkin.FadeNineSlice(f.NineSlice) end
     if _G.LootFrameBg then _G.LootFrameBg:SetAlpha(0) end
     if f.Bg and f.Bg.SetAlpha then f.Bg:SetAlpha(0) end
@@ -11878,6 +11975,11 @@ local function Skin_Loot()
     -- text so quality coloring survives.
     local function SkinLootRow(row)
         if not row or row:IsForbidden() then return end
+        if forever then
+            local showQuality = EllesmereUIDB.foreverLootQualityLabel ~= false
+            if row.QualityStripe then row.QualityStripe:SetShown(showQuality) end
+            if row.QualityText then row.QualityText:SetShown(showQuality) end
+        end
         local item = row.Item or row
         local icon = item.icon or item.Icon or item.IconTexture
             or (item.GetNormalTexture and item:GetNormalTexture())
@@ -11911,7 +12013,14 @@ local function Skin_Loot()
             -- snap-immune), so NOTHING is written onto Blizzard frames -- all state sits in FFD and PP's own registry.
             local PPb = EllesmereUI and (EllesmereUI.PanelPP or EllesmereUI.PP)
             local idd = GetFFD(item)
-            if not idd.qBorder and PPb and PPb.CreateBorder and item.CreateTexture then
+            local global = forever and not UsesLegacyLootBorder(EllesmereUIDB)
+            if global then
+                PaintForeverLootIcon(row, item, icon, PPb, idd)
+            elseif idd.globalLootBorder then
+                idd.globalLootBorder:Hide()
+                if idd.qBorder then idd.qBorder:Show() end
+            end
+            if not global and not idd.qBorder and PPb and PPb.CreateBorder and item.CreateTexture then
                 local host = CreateFrame("Frame", nil, item)
                 host:SetPoint("TOPLEFT", icon, "TOPLEFT", 0, 0)
                 host:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 0, 0)
@@ -11923,7 +12032,7 @@ local function Skin_Loot()
             -- quality and HIDDEN for poor/common drops, so hidden/absent maps
             -- to black as wanted. Re-read every pass (pooled rows change item
             -- between opens); the ring is hidden again after reading.
-            if idd.qBorder and PPb and PPb.SetBorderColor then
+            if not global and idd.qBorder and PPb and PPb.SetBorderColor then
                 local ring = item.IconBorder
                 local qr, qg, qb = 0, 0, 0
                 local isQuality = false
@@ -12053,6 +12162,7 @@ local function Skin_Loot()
     if box and box.ForEachFrame then
         pcall(box.ForEachFrame, box, SkinLootRow)
         local bd = GetFFD(box)
+        if forever then bd.skinLootRow = SkinLootRow end
         if box.Update and not bd.rowHook then
             bd.rowHook = true
             hooksecurefunc(box, "Update", function(b)
@@ -12071,6 +12181,19 @@ end
 function WSkin.RefreshLootWindowBorder()
     local f = _G.LootFrame
     if not (lootSkinned and f) then return end
+    if forever then
+        if f:IsForbidden() or WSkin.GetStyle("loot") == "off" then
+            SyncLootQualityWatch(false)
+            return
+        end
+        ApplyLootBorder(f)
+        local box = f.ScrollBox
+        local bd = box and FFD[box]
+        if f:IsShown() and bd and bd.skinLootRow then
+            pcall(box.ForEachFrame, box, bd.skinLootRow)
+        end
+        return
+    end
     ApplyLootBorder(f)
     if not (EllesmereUIDB.lootIconBorder and f:IsShown() and f.ScrollBox and f.ScrollBox.ForEachFrame) then return end
     local color = LootWindowColor()
@@ -12084,6 +12207,14 @@ function WSkin.RefreshLootWindowBorder()
 end
 
 EllesmereUI._Loot_RefreshBorder = function()
+    if forever then
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverLootSkin", WSkin.RefreshLootWindowBorder)
+        else
+            WSkin.RefreshLootWindowBorder()
+        end
+        return
+    end
     local f = _G.LootFrame
     if not (lootSkinned and f) then return end
     if f:IsShown() then Skin_Loot() else ApplyLootBorder(f) end

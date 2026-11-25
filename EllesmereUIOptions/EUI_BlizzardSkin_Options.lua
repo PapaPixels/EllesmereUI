@@ -2553,6 +2553,29 @@ initFrame:SetScript("OnEvent", function(self)
             if EllesmereUI._Loot_RefreshBorder then EllesmereUI._Loot_RefreshBorder() end
         end
 
+        if EllesmereUI.IS_FOREVER then
+            _, h = W:DualRow(parent, y,
+                { type = "toggle", text = "Quality Color",
+                  tooltip = "Color the window border by the highest-quality item in the loot window.",
+                  disabled = function() return lootOff() or not EllesmereUIDB.blizzWinBorderTexture end,
+                  disabledTooltip = function() return lootOff() and "Loot Window" or "a custom Border Style" end,
+                  getValue = ns.ForeverLootQualityBorder,
+                  setValue = function(v)
+                      ns.AdoptForeverLootBorder()
+                      EllesmereUIDB.foreverLootQualityBorder = v
+                      refresh()
+                  end },
+                { type = "toggle", text = "Show Item Quality",
+                  tooltip = "Show the item quality label and its shadow on loot rows.",
+                  disabled = lootOff, disabledTooltip = "Loot Window",
+                  getValue = function() return EllesmereUIDB.foreverLootQualityLabel ~= false end,
+                  setValue = function(v)
+                      EllesmereUIDB.foreverLootQualityLabel = v
+                      refresh()
+                  end })
+            return y - h
+        end
+
         _, h = WSCardSection(parent, "BORDER", y);  y = y - h
 
         -- Previously customized Loot borders keep their editor under EllesmereUI.
@@ -4073,7 +4096,10 @@ initFrame:SetScript("OnEvent", function(self)
         local function borderOff() return not db.blizzWinBorderTexture end
         local function radiusOff() return not EllesmereUI.RoundedStyleOK(db.blizzWinBorderTexture) end
         local radiusTooltip = "This option requires the Solid, Glow or Shadow border style."
-        local refreshBorder = ns.WSkin.RefreshBorders
+        local function refreshBorder()
+            ns.AdoptForeverLootBorder()
+            ns.WSkin.RefreshBorders()
+        end
         local values = EllesmereUI.GetBorderTextureDropdown()
         values.default = "EllesmereUI"
         local borderRow
@@ -4097,14 +4123,22 @@ initFrame:SetScript("OnEvent", function(self)
                   get = function() return db.blizzWinCornerRadius or 0 end,
                   set = function(v)
                       db.blizzWinCornerRadius = v
-                      ns.WSkin.RefreshFrameCorners()
+                      if ns.AdoptForeverLootBorder() then
+                          ns.WSkin.RefreshBorders()
+                      else
+                          ns.WSkin.RefreshFrameCorners()
+                      end
                   end },
                 { type = "slider", label = "Icon Corner Radius", min = 0, max = EllesmereUI.ROUNDED_MAX_RADIUS, step = 1,
                   disabled = radiusOff, disabledTooltip = radiusTooltip,
                   get = function() return db.blizzWinIconCornerRadius or 0 end,
                   set = function(v)
                       db.blizzWinIconCornerRadius = v
-                      ns.WSkin.RefreshIconCorners()
+                      if ns.AdoptForeverLootBorder() then
+                          ns.WSkin.RefreshBorders()
+                      else
+                          ns.WSkin.RefreshIconCorners()
+                      end
                   end },
             },
         })
@@ -5090,6 +5124,11 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.reskinLoot = nil
                 EllesmereUIDB.lootIconBorder = nil
                 EllesmereUIDB.lootWindowBorderQualityColor = nil
+                if EllesmereUI.IS_FOREVER then
+                    EllesmereUIDB.foreverLootGlobalBorder = nil
+                    EllesmereUIDB.foreverLootQualityBorder = nil
+                    EllesmereUIDB.foreverLootQualityLabel = nil
+                end
                 EllesmereUIDB.reskinLootToast = nil
                 EllesmereUIDB.reskinBNetToast = nil
                 EllesmereUIDB.lootToastQualityStrip = nil
