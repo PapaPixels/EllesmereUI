@@ -7,6 +7,7 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 -------------------------------------------------------------------------------
 local ADDON_NAME, ns = ...
 local skinned = false
+local RefreshSlotStyles
 local GetItemInfo = C_Item.GetItemInfo
 local GetItemInfoInstant = C_Item.GetItemInfoInstant
 
@@ -277,10 +278,17 @@ local function EUI_UpdateSlotStyle(slotName, slotID, textOverlayFrame, isRightCo
     local inspectUnit = InspectFrame and InspectFrame.unit
     if not inspectUnit then return end
 
-    local fontPath = EllesmereUI.GetFontPath("blizzardSkin") or STANDARD_TEXT_FONT
     local itemLink = GetInventoryItemLink(inspectUnit, slotID)
+    if issecretvalue and issecretvalue(itemLink) then itemLink = nil end
     GetFFD(slot).itemLink = itemLink
 
+    if ns.ForeverStatText then
+        ns.ForeverRefreshInspectSlot(slot)
+        if not itemLink or skipLabels then return false end
+        return ForeverSlotLabels(slot, slotName, slotID, inspectUnit, itemLink, textOverlayFrame, isRightColumn)
+    end
+
+    local fontPath = EllesmereUI.GetFontPath("blizzardSkin") or STANDARD_TEXT_FONT
     local borderR, borderG, borderB = 0.4, 0.4, 0.4
     if itemLink then
         local rarity = C_Item.GetItemQualityByID(itemLink)
@@ -294,12 +302,6 @@ local function EUI_UpdateSlotStyle(slotName, slotID, textOverlayFrame, isRightCo
         EllesmereUI.RoundedBorderColor(slot, borderR, borderG, borderB, 1)
     end
     GetFFD(slot).border = true
-
-    -- WoW Forever lays its slot text out as that client's character sheet does.
-    if ns.ForeverStatText then
-        if not itemLink or skipLabels then return false end
-        return ForeverSlotLabels(slot, slotName, slotID, inspectUnit, itemLink, textOverlayFrame, isRightColumn)
-    end
 
     -- Label offsets off the slot edge: further out under Blizz Default, past
     -- Blizzard's bronze slot frames (the character sheet's values).
@@ -541,7 +543,7 @@ local function CalculateAverageItemLevel()
     -- Use the proper WoW API for getting inspect item level
     if C_PaperDollInfo and C_PaperDollInfo.GetInspectItemLevel then
         local ilvl = C_PaperDollInfo.GetInspectItemLevel(unit)
-        if ilvl and ilvl > 0 then
+        if not (issecretvalue and issecretvalue(ilvl)) and ilvl and ilvl > 0 then
             return ilvl
         end
     end
@@ -608,7 +610,7 @@ local function UpdateInspectHeader(frame)
     local mpScore = 0
     if inspectUnit and C_PlayerInfo and C_PlayerInfo.GetPlayerMythicPlusRatingSummary then
         local summary = C_PlayerInfo.GetPlayerMythicPlusRatingSummary(inspectUnit)
-        if summary and summary.currentSeasonScore then
+        if summary and not (issecretvalue and issecretvalue(summary.currentSeasonScore)) and summary.currentSeasonScore then
             mpScore = summary.currentSeasonScore
         end
     end
@@ -622,9 +624,7 @@ local function UpdateInspectHeader(frame)
     end
 end
 
--- Blizz Default: Blizzard's window, slots and tabs stay untouched; only the
--- slot text, the item level / M+ score lines and their tab visibility.
-local function SkinStockInspectSheet(frame)
+local function BuildInspectOverlays(frame)
     -- Above Blizzard's model, below the slot buttons; hides with the tab.
     local textOverlayFrame = GetFFD(frame).textOverlayFrame
     if not textOverlayFrame then
@@ -639,13 +639,19 @@ local function SkinStockInspectSheet(frame)
     textOverlayFrame:Show()
 
     -- WoW Forever: the item levels' own layer, above the slot buttons.
-    if ns.ForeverStatText and InspectPaperDollItemsFrame and not GetFFD(frame).ilvlOverlay then
-        local layer = CreateFrame("Frame", nil, InspectPaperDollItemsFrame)
-        layer:SetAllPoints(InspectPaperDollItemsFrame)
+    local items = InspectPaperDollItemsFrame
+    if ns.ForeverStatText and items and not GetFFD(frame).ilvlOverlay then
+        local layer = CreateFrame("Frame", nil, items)
+        layer:SetAllPoints(items)
         layer:SetFrameLevel((_G.InspectHeadSlot and _G.InspectHeadSlot:GetFrameLevel() or 100) + 5)
         GetFFD(frame).ilvlOverlay = layer
     end
+    return textOverlayFrame
+end
 
+-- Blizz Default keeps Blizzard's window, slots and tabs.
+local function SkinStockInspectSheet(frame)
+    local textOverlayFrame = BuildInspectOverlays(frame)
     for slotName, gridPos in pairs(slotGridMap) do
         local slot = _G[slotName]
         if slot then EUI_UpdateSlotStyle(slotName, slot:GetID(), textOverlayFrame, gridPos.col == 1) end
@@ -661,6 +667,79 @@ local function SkinStockInspectSheet(frame)
     end
 end
 
+local function SkinForeverInspectSheet(frame)
+    if not frame:IsShown() or not frame.unit then return end
+    local d = GetFFD(frame)
+    if not d.foreverSkinned then
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverInspectBuild", EllesmereUI.ApplyThemedInspectSheet)
+            skinned = false
+            return
+        end
+        local WSkin = ns.WSkin
+        local doll, items, model = InspectPaperDollFrame, InspectPaperDollItemsFrame, InspectModelFrame
+        if not (doll and items and model) then return end
+        d.foreverSkinned = true
+
+        ns.ForeverLayoutInspect(frame, model)
+        WSkin.Shell("charsheet", frame)
+        WSkin.CommonChrome(frame, "InspectFrame", true)
+        WSkin.RemovePortrait(frame)
+        WSkin.Inset(InspectFrameInset)
+        WSkin.FadeRegions(model)
+        ns.ForeverHideSceneArt(model)
+        local controls = model.controlFrame
+        if controls and not controls:IsProtected() then
+            EllesmereUI.HideFrame(controls)
+            controls:HookScript("OnShow", EllesmereUI.HideFrame)
+        end
+
+        local topBar = WSkin.GetFFD(frame).topBar
+        local close = frame.CloseButton
+        ns.ForeverSkinClose(close, topBar)
+        local modelBg = ns.ForeverModelBackdrop(frame, topBar, doll, frame)
+        local dividers = ns.ForeverBuildDividers(frame, topBar, modelBg, nil, true)
+        WSkin.SetWindowBorderDetails(frame, modelBg, nil, dividers, true)
+
+        local titleSize = ns.ForeverTitleSize()
+        local title = frame:GetTitleText()
+        WSkin.Font(title, 1, 1, 1, titleSize)
+        local function ColorTitle()
+            if not frame.unit then return end
+            local _, class = UnitClass(frame.unit)
+            local color = not (issecretvalue and issecretvalue(class)) and EllesmereUI.GetRawClassColor(class)
+            if color then title:SetTextColor(color.r, color.g, color.b) else title:SetTextColor(1, 1, 1) end
+        end
+        hooksecurefunc(frame, "SetTitle", ColorTitle)
+        ColorTitle()
+
+        local level = InspectLevelText
+        WSkin.Font(level, nil, nil, nil, titleSize - 2)
+        local levelWrapper = doll.LevelTextWrapper
+        if levelWrapper and not levelWrapper:IsProtected() then
+            levelWrapper:ClearAllPoints()
+            levelWrapper:SetPoint("CENTER", topBar, "BOTTOM", 0, ns.ForeverLevelRowY())
+        end
+        local function ColorLevel() ns.ForeverColorLevelLabel(level) end
+        hooksecurefunc(doll, "SetLevel", ColorLevel)
+        ColorLevel()
+
+        for slotName in pairs(slotGridMap) do
+            local slot = _G[slotName]
+            if slot then ns.ForeverSkinSlot(slot, slotName, frame.unit) end
+        end
+        BuildInspectOverlays(frame)
+        local eye = ns.ForeverBuildItemTextEye(items, topBar, d.textOverlayFrame, d.ilvlOverlay)
+        ns.ForeverSkinHeaderHover(frame, topBar, { eye }, close)
+        hooksecurefunc("InspectSwitchTabs", function()
+            ApplyTabVisibility(items:IsVisible())
+        end)
+    end
+
+    UpdateInspectHeader(frame)
+    RefreshSlotStyles()
+end
+
 local function SkinInspectSheet()
     if skinned then return end
     skinned = true
@@ -668,6 +747,7 @@ local function SkinInspectSheet()
     local frame = InspectFrame
     if not frame then return end
     if StockLook() then return SkinStockInspectSheet(frame) end
+    if ns.ForeverSkinSlot then return SkinForeverInspectSheet(frame) end
 
 
     local FRAME_BG_R, FRAME_BG_G, FRAME_BG_B = 0.03, 0.045, 0.05
@@ -981,15 +1061,7 @@ local function SkinInspectSheet()
     -- Show actual slot buttons and style them
     for _, slotName in ipairs(EUI_ALL_SLOTS) do
         local slot = _G[slotName]
-        -- WoW Forever: the slot dress of that client's character sheet (the
-        -- bronze frame off, a grey square and a 2px border colored by the
-        -- item in EUI_UpdateSlotStyle).
-        if slot and ns.ForeverSkinSlot then
-            slot:Show()
-            ns.ForeverSkinSlot(slot, slotName)
-            local parent = slot:GetParent()
-            if parent then parent:Show() end
-        elseif slot then
+        if slot then
             slot:Show()
 
             -- Hide ALL unnamed Texturen in den Slots (die Dekoration)
@@ -1513,7 +1585,7 @@ end
 -- Persistently hide NineSlice borders
 local function EnsureInspectNineSliceHidden()
     if EllesmereUIDB and (EllesmereUIDB.themedInspectSheet == false or EllesmereUI.BlizzWindowSkinsKilled()) then return end
-    if not InspectFrame or StockLook() then return end
+    if not InspectFrame or StockLook() or ns.ForeverSkinSlot then return end
 
     local frame = InspectFrame
 
@@ -1574,6 +1646,11 @@ if EllesmereUI then
         hooksecurefunc(InspectFrame, "SetPoint", function()
             if not _ignoreSP then RefreshDock() end
         end)
+        if EllesmereUI.IS_FOREVER then
+            InspectFrame:HookScript("OnSizeChanged", function(self)
+                if GetFFD(self).foreverSkinned and not _ignoreSP then RefreshDock() end
+            end)
+        end
 
         -- CharacterFrame is core UI, already loaded here (unlike InspectFrame).
         -- OnShow/OnHide re-pair; the SetPoint hook catches Blizzard's own panel
@@ -1615,7 +1692,6 @@ if EllesmereUI then
     -- INSPECT_READY starts a new wait), one pass per burst.
     local WAIT_SECS = 5
     local waitStart, retryTimer
-    local RefreshSlotStyles  -- forward
     local dataWatch = CreateFrame("Frame")
     local function StopWait()
         dataWatch:UnregisterAllEvents()
@@ -1670,7 +1746,7 @@ if EllesmereUI then
         -- Update label visibility after all slots have been styled
         local frame = InspectFrame
         if frame then
-            ApplyTabVisibility(InspectPaperDollItemsFrame and InspectPaperDollItemsFrame:IsShown())
+            ApplyTabVisibility((frame.selectedTab or 1) == 1)
         end
     end
 
@@ -1691,10 +1767,10 @@ if EllesmereUI then
         skinned = false
         ApplyThemedInspectSheet()
         EnsureInspectNineSliceHidden()
-        RefreshSlotStyles()
+        if not ns.ForeverSkinSlot or StockLook() then RefreshSlotStyles() end
         local frame = InspectFrame
         if frame then
-            ApplyTabVisibility(InspectPaperDollItemsFrame and InspectPaperDollItemsFrame:IsShown())
+            ApplyTabVisibility((frame.selectedTab or 1) == 1)
             -- Apply visibility settings after styling
             if EllesmereUI._refreshInspectItemLevelVisibility then
                 EllesmereUI._refreshInspectItemLevelVisibility()

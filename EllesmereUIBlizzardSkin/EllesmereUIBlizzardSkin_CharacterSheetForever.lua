@@ -235,6 +235,55 @@ local SLOTS = {
     "CharacterMainHandSlot", "CharacterSecondaryHandSlot", "CharacterRangedSlot", "CharacterAmmoSlot",
 }
 
+-- Use the paper doll's left inset on all three edges and mirror its slot anchors in Inspect.
+local function LayoutGearSlots(frame, inspect)
+    local character, head = _G.CharacterFrame, _G.CharacterHeadSlot
+    local pane = character and character.LeftPaneHost
+    if not (pane and head) then return end
+    local _, _, _, inset = head:GetPoint()
+    local _, _, _, _, paneTop = pane:GetPoint()
+    if not inset then return end
+
+    for _, name in ipairs(SLOTS) do
+        local right = name == "CharacterHandsSlot"
+        local weapon = name == "CharacterMainHandSlot"
+        if inspect or right or weapon then
+            local source = _G[name]
+            local slot = source
+            if inspect then slot = _G["Inspect" .. name:sub(10)] end
+            if source and slot and not slot:IsProtected() then
+                local point, relative, relativePoint, x, y = source:GetPoint()
+                if inspect and relative == pane then
+                    relative = frame
+                    if point == "TOPLEFT" or point == "TOPRIGHT" then y = (y or 0) + (paneTop or 0) end
+                elseif inspect then
+                    local relativeName = relative and relative:GetName()
+                    relative = relativeName and _G["Inspect" .. relativeName:sub(10)]
+                end
+                if point and relative then
+                    if right then x = -inset end
+                    if weapon then y = inset end
+                    if inspect then slot:SetSize(source:GetSize()) end
+                    slot:ClearAllPoints()
+                    slot:SetPoint(point, relative, relativePoint, x, y)
+                end
+            end
+        end
+    end
+end
+
+function ns.ForeverLayoutInspect(frame, model)
+    if not frame:IsProtected() then frame:SetSize(CHARACTER_FRAME_COLLAPSED_WIDTH, CHARACTER_FRAME_HEIGHT) end
+    if not model:IsProtected() then
+        local point, parent, _, _, y = model:GetPoint()
+        if point == "TOPLEFT" then
+            model:ClearAllPoints()
+            model:SetPoint("TOP", parent, "TOP", 0, y)
+        end
+    end
+    LayoutGearSlots(frame, true)
+end
+
 local function FadeChildren(frame, Fade)
     if not frame then return end
     local children = { frame:GetChildren() }
@@ -259,22 +308,22 @@ local function ItemQualityColor(quality)
 end
 
 -- The equipped item's quality color; nothing when the slot is empty.
-local function QualityColor(slot)
-    return ItemQualityColor(GetInventoryItemQuality("player", slot:GetID()))
+local function QualityColor(slot, unit)
+    return ItemQualityColor(GetInventoryItemQuality(unit or "player", slot:GetID()))
 end
 
 -- The slot border color: the equipped item's quality, dark grey when empty
 -- (the retail sheet's values).
-local function SlotBorderColor(slot)
-    local r, g, b = QualityColor(slot)
+local function SlotBorderColor(slot, unit)
+    local r, g, b = QualityColor(slot, unit)
     if r then return r, g, b end
     return 0.4, 0.4, 0.4
 end
 
-local function ColorSlotBorder(slot, border)
+local function ColorSlotBorder(slot, border, unit)
     local PanelPP = EllesmereUI.PanelPP
     if not (PanelPP and PanelPP.SetBorderColor) then return end
-    local r, g, b = SlotBorderColor(slot)
+    local r, g, b = SlotBorderColor(slot, unit)
     local d = ns.WSkin.GetFFD(border)
     local color = d.windowBorderTint
     if color then
@@ -961,6 +1010,8 @@ end
 local function OnSlotUpdate(slot)
     local d = FFD[slot]
     if not d then return end
+    local unit = d.inspect and _G.InspectFrame.unit
+    if d.inspect and not unit then return end
     local icon = d.cropIcon
     if d.skinnedSlotChrome then SuppressSlotChrome(slot) end
     -- SetItemButtonTexture can restore the full texture during a slot refresh.
@@ -972,9 +1023,10 @@ local function OnSlotUpdate(slot)
             ns.WSkin.RegisterWindowIcon(icon)
         end
     end
-    if d.border then ColorSlotBorder(slot, d.border) end
+    if d.border then ColorSlotBorder(slot, d.border, unit) end
     if d.stats then PaintSlotText(slot) end
 end
+ns.ForeverRefreshInspectSlot = OnSlotUpdate
 
 local slotHooked = false
 local function HookSlotUpdates()
@@ -993,10 +1045,11 @@ end
 -- (ns.ForeverSkinSlot): the bronze frame and the button art off, the quality
 -- ring suppressed, the icon cropped, a grey square behind it and a border
 -- that the sheet colors by its item. Once per slot.
-local function DressSlot(slot, slotName, Fade, themedBorder)
+local function DressSlot(slot, slotName, Fade, inspectUnit)
     local d = GetFFD(slot)
     if d.done then return end
     d.done = true
+    d.inspect = inspectUnit ~= nil
     -- The bronze slot frame lives on a child frame; the button art is the
     -- named NormalTexture (hidden, not faded: the client rewrites its vertex
     -- color, and with it the alpha, on every item update).
@@ -1014,28 +1067,23 @@ local function DressSlot(slot, slotName, Fade, themedBorder)
     end
     local normal = _G[slotName .. "NormalTexture"] or (slot.GetNormalTexture and slot:GetNormalTexture())
     if normal then normal:Hide() end
-    if themedBorder then
-        d.skinnedSlotChrome = true
-        SuppressSlotChrome(slot)
-        slot:HookScript("OnClick", SuppressSlotChrome)
-    elseif slot.IconBorder then
-        slot.IconBorder:SetTexCoord(0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8)
-    end
+    d.skinnedSlotChrome = true
+    SuppressSlotChrome(slot)
+    slot:HookScript("OnClick", SuppressSlotChrome)
     -- The item icon is the button's own; the ammo slot also declares a
     -- legacy texture under the same global name, which is not it.
     local icon = slot.icon or _G[slotName .. "IconTexture"]
     if icon then
-        if themedBorder then ns.WSkin.RemoveStockItemMask(slot, icon) end
+        ns.WSkin.RemoveStockItemMask(slot, icon)
         local z = Zoom()
         ns.WSkin.SetIconCrop(icon, z)
-        if themedBorder then d.cropIcon, d.crop = icon, z end
+        d.cropIcon, d.crop = icon, z
     end
     local bg = slot:CreateTexture(nil, "BACKGROUND", nil, -5)
     bg:SetAllPoints(slot)
     bg:SetColorTexture(0.5, 0.5, 0.5, 0.7)
-    local hover, flash
-    if themedBorder then
-        hover, flash = BuildSlotHover(slot, icon)
+    local hover, flash = BuildSlotHover(slot, icon)
+    if not inspectUnit then
         local glow = slot:CreateTexture(nil, "OVERLAY")
         glow:SetAllPoints(hover)
         glow:SetTexture(ACTION_BAR_MEDIA .. "highlight-3.png")
@@ -1046,54 +1094,42 @@ local function DressSlot(slot, slotName, Fade, themedBorder)
     end
     local PanelPP = EllesmereUI.PanelPP
     if PanelPP and PanelPP.CreateBorder then
-        local host = slot
-        if themedBorder then
-            host = CreateFrame("Frame", nil, slot)
-            host:SetAllPoints(slot)
-            host:SetFrameLevel(slot:GetFrameLevel())
-        end
-        PanelPP.CreateBorder(host, 0.4, 0.4, 0.4, 1, themedBorder and 1 or 2, "OVERLAY", 1)
+        local host = CreateFrame("Frame", nil, slot)
+        host:SetAllPoints(slot)
+        host:SetFrameLevel(slot:GetFrameLevel())
+        PanelPP.CreateBorder(host, 0.4, 0.4, 0.4, 1, 1, "OVERLAY", 1)
         local borders = PanelPP.GetBorders(host)
         if borders then borders:SetFrameLevel(slot:GetFrameLevel()) end
         d.border = host
         local WSkin = ns.WSkin
-        if themedBorder then
-            local r, g, b = SlotBorderColor(slot)
-            PanelPP.SetBorderColor(host, r, g, b, 1)
-            WSkin.RegisterWindowIconBorder(host, borders, { r = r, g = g, b = b })
-        end
-        WSkin.RegisterWindowIcon(icon, host, bg, hover, nil, nil, hover and { flash, d.altFlyoutGlow })
+        local r, g, b = SlotBorderColor(slot, inspectUnit)
+        PanelPP.SetBorderColor(host, r, g, b, 1)
+        WSkin.RegisterWindowIconBorder(host, borders, { r = r, g = g, b = b })
+        WSkin.RegisterWindowIcon(icon, host, bg, hover, nil, nil, { flash, d.altFlyoutGlow })
     end
 end
 
 local function SkinSlot(slotName, Fade)
     local slot = _G[slotName]
     if not slot then return end
-    DressSlot(slot, slotName, Fade, true)
+    DressSlot(slot, slotName, Fade)
 end
 
--- The inspect sheet's slots: the same dress, the border colored by that
--- sheet from the inspected item. Its styling pass runs on every show and
--- every arrival of inspect data, so the icon crop is set again on each call.
-function ns.ForeverSkinSlot(slot, slotName)
-    local Fade = ns.WSkin and ns.WSkin.FadeRegions
-    if not (slot and Fade) then return end
-    DressSlot(slot, slotName, Fade)
-    local icon = slot.icon or _G[slotName .. "IconTexture"]
-    if icon then
-        local z = Zoom()
-        ns.WSkin.SetIconCrop(icon, z)
+local inspectSlotHooked
+function ns.ForeverSkinSlot(slot, slotName, unit)
+    DressSlot(slot, slotName, ns.WSkin.FadeRegions, unit)
+    if not inspectSlotHooked then
+        inspectSlotHooked = true
+        hooksecurefunc("InspectPaperDollItemSlotButton_Update", OnSlotUpdate)
     end
 end
 
 -- Options-page refresh: the Icon Zoom slider lands here (the retail sheet's
 -- own refresher is replaced, it walks the retail slot list).
 function EllesmereUI._refreshCharSheetIconZoom()
-    if not Enabled() then return end
     local z = Zoom()
-    for i = 1, #SLOTS do
-        local d = FFD[_G[SLOTS[i]]]
-        if d and d.cropIcon then
+    for _, d in pairs(FFD) do
+        if d.cropIcon then
             d.crop = z
             ns.WSkin.SetIconCrop(d.cropIcon, z)
         end
@@ -1122,7 +1158,7 @@ end
 -- shade would cover our backdrop. Nothing of Blizzard's shows them again, so
 -- they are hidden, as on the retail and inspect sheets.
 local SCENE_ART = { "BackgroundOverlay", "BackgroundTopLeft", "BackgroundTopRight", "BackgroundBotLeft", "BackgroundBotRight" }
-local function HideSceneArt(scene)
+function ns.ForeverHideSceneArt(scene)
     if not scene then return end
     for i = 1, #SCENE_ART do
         local art = scene[SCENE_ART[i]]
@@ -1160,6 +1196,7 @@ local function SkinPaneToggle(frame, WSkin)
 end
 
 local CONTROL_WIDTH, CONTROL_ALPHA = 18, 0.4
+local TITLE_INSET = 22
 
 local function SkinControlFeedback(button, art)
     local function Release()
@@ -1181,7 +1218,7 @@ local function SkinControlFeedback(button, art)
     end)
 end
 
-local function SkinHeaderHover(frame, topBar, controls, close)
+function ns.ForeverSkinHeaderHover(frame, topBar, controls, close)
     local header = CreateFrame("Frame", nil, frame)
     header:SetAllPoints(topBar)
     header:SetMouseMotionEnabled(true)
@@ -1209,6 +1246,54 @@ local function SkinHeaderHover(frame, topBar, controls, close)
         close:HookScript("OnLeave", Refresh)
     end
     Refresh()
+end
+
+function ns.ForeverSkinClose(close, topBar)
+    if not (topBar and close) or close:IsProtected() then return end
+    close:ClearAllPoints()
+    close:SetPoint("CENTER", topBar, "RIGHT", -TITLE_INSET, 0)
+    local glyph = ns.WSkin.GetFFD(close).x
+    if glyph then
+        glyph:ClearAllPoints()
+        glyph:SetPoint("CENTER", close)
+    end
+end
+
+function ns.ForeverBuildItemTextEye(items, topBar, overlay, ilvlOverlay, field)
+    local character = field and EllesmereUI.CharEntry()
+    local hidden = character and character[field] == true
+    local button = CreateFrame("Button", nil, items)
+    button:SetSize(CONTROL_WIDTH, 20)
+    button:SetPoint("CENTER", topBar, "LEFT", TITLE_INSET, 0)
+    button:SetFrameLevel(items:GetFrameLevel() + 5)
+    local art = button:CreateTexture(nil, "OVERLAY")
+    art:SetSize(CONTROL_WIDTH, CONTROL_WIDTH)
+    art:SetPoint("CENTER")
+    local function Apply()
+        art:SetTexture(hidden and EllesmereUI.EYE_INVISIBLE_ICON or EllesmereUI.EYE_VISIBLE_ICON)
+        overlay:SetAlpha(hidden and 0 or 1)
+        ilvlOverlay:SetAlpha(hidden and 0 or 1)
+    end
+    local tooltipOpts = { anchor = "right" }
+    local function ShowTooltip(self)
+        EllesmereUI.ShowWidgetTooltip(self, hidden and "Show Item Text" or "Hide Item Text", tooltipOpts)
+    end
+    local function HideTooltip(self)
+        if EllesmereUI._WidgetTooltipOwner() == self then EllesmereUI.HideWidgetTooltip() end
+    end
+    button:SetScript("OnClick", function(self)
+        hidden = not hidden
+        local entry = field and EllesmereUI.CharEntry(true)
+        if entry then entry[field] = hidden end
+        Apply()
+        if EllesmereUI._WidgetTooltipOwner() == self then ShowTooltip(self) end
+    end)
+    button:SetScript("OnEnter", ShowTooltip)
+    button:SetScript("OnLeave", HideTooltip)
+    button:SetScript("OnHide", HideTooltip)
+    SkinControlFeedback(button, art)
+    Apply()
+    return button
 end
 
 local function SkinModelControls(scene, eye, WSkin)
@@ -1284,15 +1369,14 @@ local function SkinModelControls(scene, eye, WSkin)
     return buttons
 end
 
-local function ModelBackdrop(frame, topBar)
-    local doll = _G.PaperDollFrame
-    if not (doll and frame.LeftPaneHost) then return end
+function ns.ForeverModelBackdrop(frame, topBar, doll, pane)
+    if not (doll and pane) then return end
     -- Stay at the shell's level below the outer border and the model scene.
     local host = CreateFrame("Frame", nil, frame)
     host:SetFrameLevel(frame:GetFrameLevel())
-    PinTop(host, topBar, frame.LeftPaneHost)
+    PinTop(host, topBar, pane)
     host:SetPoint("LEFT", frame, "LEFT", 0, 0)
-    host:SetPoint("RIGHT", frame.LeftPaneHost, "RIGHT", 0, 0)
+    host:SetPoint("RIGHT", pane, "RIGHT", 0, 0)
     host:SetPoint("BOTTOM", frame, "BOTTOM", 0, 0)
     doll:HookScript("OnShow", function() host:Show() end)
     doll:HookScript("OnHide", function() host:Hide() end)
@@ -1377,7 +1461,7 @@ local function BuildModeTabEffects(tab, WSkin, icon, mask, squareMask)
     end
 end
 
-local function ModeTabArtwork(frame, tab, WSkin)
+local function ModeTabArtwork(frame, tab, WSkin, inspect)
     local native, mask = tab.Icon, tab.Mask
     local portrait = tab == frame.ModeTabs.CharacterTab
     local function CropNative()
@@ -1385,15 +1469,16 @@ local function ModeTabArtwork(frame, tab, WSkin)
         WSkin.SetIconCrop(native, 0.075)
         native:AddMaskTexture(mask)
     end
-    if not portrait then CropNative() end
-
     local icon = tab:CreateTexture(nil, "ARTWORK", nil, 1)
     local useNative
     local function PaintPortrait()
         if useNative then
             CropNative()
         else
-            SetPortraitTexture(icon, "player", true)
+            local unit = "player"
+            if inspect then unit = frame.unit end
+            if not unit then return end
+            SetPortraitTexture(icon, unit, true)
             WSkin.SetIconCrop(icon, 0.045)
         end
     end
@@ -1408,8 +1493,13 @@ local function ModeTabArtwork(frame, tab, WSkin)
         if portrait then PaintPortrait() end
     end
     if not portrait then
-        icon:SetTexture(tab.iconTexture or native:GetTexture())
-        WSkin.SetIconCrop(icon, 0.075)
+        local function SyncIcon()
+            icon:SetTexture(tab.iconTexture or native:GetTexture())
+            WSkin.SetIconCrop(icon, 0.075)
+            CropNative()
+        end
+        SyncIcon()
+        if inspect then hooksecurefunc(frame, "SetupModeTabs", SyncIcon) end
     end
     local style = EllesmereUIDB and EllesmereUIDB.blizzWinBorderTexture
     SetStyle(not style, WSkin.IsModeTabBorderStyle(style))
@@ -1429,10 +1519,11 @@ local function ModeTabArtwork(frame, tab, WSkin)
     return icon, square, square, SetStyle
 end
 
-local function BuildModeTabSkin(frame, WSkin)
+local function BuildModeTabSkin(frame, WSkin, inspect)
     local host = frame.ModeTabs
     local tabs = host and host.Tabs
-    if not (tabs and frame.UpdateTabLayout) or host:IsProtected() then return end
+    local layoutMethod = inspect and "InitializeModeTabLayout" or "UpdateTabLayout"
+    if not (tabs and frame[layoutMethod]) or host:IsProtected() then return end
     for _, tab in ipairs(tabs) do
         if tab:IsProtected() then return end
     end
@@ -1458,14 +1549,14 @@ local function BuildModeTabSkin(frame, WSkin)
             local x = maskExtension / tab:GetScale()
             mask:SetWidth(mask:GetWidth() + x)
             mask:SetPoint("CENTER", tab, "CENTER", -x / 2, 0)
-            local icon, nativeMask, squareMask, setStyle = ModeTabArtwork(frame, tab, WSkin)
+            local icon, nativeMask, squareMask, setStyle = ModeTabArtwork(frame, tab, WSkin, inspect)
             artwork[tab] = setStyle
             effects[tab] = BuildModeTabEffects(tab, WSkin, icon, nativeMask, squareMask)
         end
     end
     local function Layout()
         if InCombatLockdown() then
-            ns.CombatQueue.Defer("ForeverModeTabLayout", Layout)
+            ns.CombatQueue.Defer(origin, Layout)
             return
         end
         if host:IsProtected() then return end
@@ -1485,7 +1576,8 @@ local function BuildModeTabSkin(frame, WSkin)
             end
         end
     end
-    hooksecurefunc(frame, "UpdateTabLayout", Layout)
+    hooksecurefunc(frame, layoutMethod, Layout)
+    if inspect then hooksecurefunc(frame, "UpdateTabs", Layout) end
     host:HookScript("OnShow", function()
         Layout()
         EllesmereUI.RegisterPxReapply(origin, Layout)
@@ -1545,24 +1637,33 @@ local function PaintHorizontalCompanion(line, style, thickness, pixel)
     line:SetTexCoord(0, 1, 1 + phase, phase)
 end
 
-local function BuildDividers(frame, topBar, modelBg, sidebarBg)
+local accentBorderHooked
+function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect)
     local right = frame.RightPaneHost
-    if not (right and topBar) then return end
+    if not topBar then return end
+    if not accentBorderHooked then
+        accentBorderHooked = true
+        EllesmereUI.RegAccent({ type = "callback", fn = function()
+            if EllesmereUIDB and EllesmereUIDB.blizzWinBorderColorMode == "accent" then
+                ns.WSkin.RefreshBorders()
+            end
+        end })
+    end
     local PP = EllesmereUI.PP
     local header = CreateFrame("Frame", nil, frame)
     header:SetAllPoints(frame)
-    local seam = CreateFrame("Frame", nil, right)
     local horizontal = header:CreateTexture(nil, "OVERLAY")
-    local vertical = seam:CreateTexture(nil, "OVERLAY")
+    local seam = right and CreateFrame("Frame", nil, right)
+    local vertical = seam and seam:CreateTexture(nil, "OVERLAY")
     local backgrounds = { modelBg, sidebarBg }
-    local skinModeTabs, tabClip = BuildModeTabSkin(frame, ns.WSkin)
+    local skinModeTabs, tabClip = BuildModeTabSkin(frame, ns.WSkin, inspect)
 
     local border, style, size, key, color, px, dock
     local dockSeam, dockLine
     local function Paint()
         if not border then return end
         if InCombatLockdown() then
-            ns.CombatQueue.Defer("ForeverSheetDividers", Paint)
+            ns.CombatQueue.Defer(header, Paint)
             return
         end
         local es = frame:GetEffectiveScale()
@@ -1595,12 +1696,10 @@ local function BuildDividers(frame, topBar, modelBg, sidebarBg)
         end
         if dock then strata, level = TopLayer(strata, level, dock) end
         header:SetFrameStrata(strata)
-        seam:SetFrameStrata(strata)
         header:SetFrameLevel(level + (dock and 4 or 2))
-        seam:SetFrameLevel(level + (dock and 5 or 3))
         if size == 0 then
             horizontal:Hide()
-            vertical:Hide()
+            if vertical then vertical:Hide() end
             if dockSeam then dockSeam:Hide() end
             return
         end
@@ -1635,10 +1734,6 @@ local function BuildDividers(frame, topBar, modelBg, sidebarBg)
             horizontal:SetTexCoord(0, 1, 0, 1)
         end
         horizontal:SetSnapToPixelGrid(not solid)
-        vertical:SetSnapToPixelGrid(not solid)
-        if pixelArt then
-            vertical:SetTexelSnappingBias(0)
-        end
         horizontal:ClearAllPoints()
         if solid then
             horizontal:SetPoint("LEFT", solid._left, "RIGHT", -pixel, 0)
@@ -1655,6 +1750,14 @@ local function BuildDividers(frame, topBar, modelBg, sidebarBg)
         horizontal:SetHeight(thick)
         horizontal:Show()
 
+        local r, g, b = 0.25, 0.25, 0.25
+        if color then r, g, b = color.r, color.g, color.b end
+        horizontal:SetVertexColor(r, g, b, 1)
+        if not seam then return end
+        seam:SetFrameStrata(strata)
+        seam:SetFrameLevel(level + (dock and 5 or 3))
+        vertical:SetSnapToPixelGrid(not solid)
+        if pixelArt then vertical:SetTexelSnappingBias(0) end
         seam:ClearAllPoints()
         seam:SetPoint("TOP", horizontal, "BOTTOM", 0, join)
         seam:SetPoint("LEFT", right, "LEFT", 0, 0)
@@ -1675,9 +1778,6 @@ local function BuildDividers(frame, topBar, modelBg, sidebarBg)
             vertical:SetWidth(thick)
             vertical:Show()
         end
-        local r, g, b = 0.25, 0.25, 0.25
-        if color then r, g, b = color.r, color.g, color.b end
-        horizontal:SetVertexColor(r, g, b, 1)
         vertical:SetVertexColor(r, g, b, 1)
         if dock then
             if not dockSeam then
@@ -1727,7 +1827,7 @@ local function BuildDividers(frame, topBar, modelBg, sidebarBg)
     end
 end
 
-local function ColorLevelLabel(label)
+function ns.ForeverColorLevelLabel(label)
     if not label then return end
     local text, word = label:GetText(), _G.LEVEL
     if not (text and word and word ~= "") or (issecretvalue and issecretvalue(text)) then return end
@@ -1739,6 +1839,21 @@ local function ColorLevelLabel(label)
     label:SetText(prefix .. "|cffffffff" .. word .. "|r" .. (openColor or "") .. text:sub(last + 1))
 end
 
+function ns.ForeverLevelRowY()
+    local tab = _G.PaperDollSidebarTab1
+    return -1 - (tab and tab:GetHeight() or 22) / 2
+end
+
+local titleSize
+function ns.ForeverTitleSize()
+    if not titleSize then
+        local frame = _G.CharacterFrame
+        local title = frame and ((frame.TitleContainer and frame.TitleContainer.TitleText) or _G.CharacterFrameTitleText)
+        titleSize = title and select(2, title:GetFont()) or 12
+    end
+    return titleSize
+end
+
 local function SkinPaperDollHeader(WSkin, modelBg, sidebarBg, fontSize)
     local firstTab = _G.PaperDollSidebarTab1
     local tabHost = _G.PaperDollSidebarTabs
@@ -1748,17 +1863,17 @@ local function SkinPaperDollHeader(WSkin, modelBg, sidebarBg, fontSize)
         tabHost:ClearAllPoints()
         tabHost:SetPoint("TOP", sidebarBg, "TOP", 0, hostTop)
     end
-    local rowY = hostTop + tabTop - firstTab:GetHeight() / 2
+    local rowY = ns.ForeverLevelRowY()
     for _, level in pairs({ _G.CharacterLevelText, _G.PetCharacterLevelText }) do
         WSkin.Font(level, nil, nil, nil, fontSize)
-        ColorLevelLabel(level)
+        ns.ForeverColorLevelLabel(level)
         if modelBg then
             level:ClearAllPoints()
             level:SetPoint("CENTER", modelBg, "TOP", 0, rowY)
         end
     end
-    hooksecurefunc("PaperDollFrame_SetLevel", function() ColorLevelLabel(_G.CharacterLevelText) end)
-    hooksecurefunc("PaperDollFrame_SetPetLevel", function() ColorLevelLabel(_G.PetCharacterLevelText) end)
+    hooksecurefunc("PaperDollFrame_SetLevel", function() ns.ForeverColorLevelLabel(_G.CharacterLevelText) end)
+    hooksecurefunc("PaperDollFrame_SetPetLevel", function() ns.ForeverColorLevelLabel(_G.PetCharacterLevelText) end)
     local names = { EllesmereUI.L("Character"), EllesmereUI.L("Equipment"), EllesmereUI.L("Titles"), EllesmereUI.L("Pet") }
     local tabs = {}
     local gap = 10
@@ -3181,7 +3296,7 @@ local function SkinFrame()
     local shell = WSkin.GetFFD and WSkin.GetFFD(frame)
     local topBar = shell and shell.topBar
     local title = (frame.TitleContainer and frame.TitleContainer.TitleText) or _G.CharacterFrameTitleText
-    local titleSize = title and select(2, title:GetFont()) or 12
+    local titleSize = ns.ForeverTitleSize()
     if title then
         WSkin.Font(title, 1, 1, 1, titleSize)
         local _, class = UnitClass("player")
@@ -3216,82 +3331,35 @@ local function SkinFrame()
     Fade(_G.PaperDollFrame)
     Fade(_G.PaperDollFrame.TopBackgroundStripHost)
     Fade(_G.CharacterModelScene)
-    HideSceneArt(_G.CharacterModelScene)
-    local titleInset = 22
+    ns.ForeverHideSceneArt(_G.CharacterModelScene)
     local close = frame.CloseButton
-    if topBar and close and not close:IsProtected() then
-        close:ClearAllPoints()
-        close:SetPoint("CENTER", topBar, "RIGHT", -titleInset, 0)
-        local glyph = WSkin.GetFFD(close).x
-        if glyph then
-            glyph:ClearAllPoints()
-            glyph:SetPoint("CENTER", close)
-        end
-    end
-    local modelBg, sidebarBg = ModelBackdrop(frame, topBar), SidebarPanel(frame, topBar)
-    local dividers = BuildDividers(frame, topBar, modelBg, sidebarBg)
+    ns.ForeverSkinClose(close, topBar)
+    local modelBg = ns.ForeverModelBackdrop(frame, topBar, _G.PaperDollFrame, frame.LeftPaneHost)
+    local sidebarBg = SidebarPanel(frame, topBar)
+    local dividers = ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg)
     local equipment = HookEquipmentSkin(WSkin, frame)
     WSkin.SetWindowBorderDetails(frame, modelBg, sidebarBg, function(...)
         if dividers then dividers(...) end
         if equipment then equipment() end
     end, true)
-    EllesmereUI.RegAccent({ type = "callback", fn = function()
-        if EllesmereUIDB and EllesmereUIDB.blizzWinBorderColorMode == "accent" then WSkin.RefreshBorders() end
-    end })
     SkinPaperDollHeader(WSkin, modelBg, sidebarBg, titleSize - 2)
 
     -- Item slots: frames off, icons cropped, a grey square and a quality
     -- border on each, and the slot text beside them; both follow Blizzard's
     -- own slot refresh.
+    LayoutGearSlots(frame, false)
     for i = 1, #SLOTS do SkinSlot(SLOTS[i], Fade) end
     BuildSlotText()
-    -- The eye toggles the shared text overlays and remembers the character's choice.
     local eyeBtn
-    if slotOverlay then
-        local EYE_VISIBLE, EYE_INVISIBLE = EllesmereUI.EYE_VISIBLE_ICON, EllesmereUI.EYE_INVISIBLE_ICON
-        local character = EllesmereUI.CharEntry()
-        local hidden = character and character.foreverItemTextHidden == true
-        -- On the slots' own frame: it goes with the slot text (other tabs,
-        -- the pet view) and sits above the mouse-enabled model scene, which
-        -- reaches up under the button's lower edge.
-        local items = slotOverlay:GetParent()
-        eyeBtn = CreateFrame("Button", nil, items)
-        eyeBtn:SetSize(CONTROL_WIDTH, 20)
-        eyeBtn:SetPoint("CENTER", topBar, "LEFT", titleInset, 0)
-        eyeBtn:SetFrameLevel(items:GetFrameLevel() + 5)
-        local eyeTex = eyeBtn:CreateTexture(nil, "OVERLAY")
-        eyeTex:SetSize(CONTROL_WIDTH, CONTROL_WIDTH)
-        eyeTex:SetPoint("CENTER")
-        local function ApplyEyeState()
-            eyeTex:SetTexture(hidden and EYE_INVISIBLE or EYE_VISIBLE)
-            slotOverlay:SetAlpha(hidden and 0 or 1)
-            ilvlOverlay:SetAlpha(hidden and 0 or 1)
-        end
-        ApplyEyeState()
-        local tooltipOpts = { anchor = "right" }
-        local function ShowEyeTooltip(self)
-            EllesmereUI.ShowWidgetTooltip(self, hidden and "Show Item Text" or "Hide Item Text", tooltipOpts)
-        end
-        local function HideEyeTooltip(self)
-            if EllesmereUI._WidgetTooltipOwner() == self then EllesmereUI.HideWidgetTooltip() end
-        end
-        eyeBtn:SetScript("OnClick", function(self)
-            hidden = not hidden
-            local entry = EllesmereUI.CharEntry(true)
-            if entry then entry.foreverItemTextHidden = hidden end
-            ApplyEyeState()
-            if EllesmereUI._WidgetTooltipOwner() == self then ShowEyeTooltip(self) end
-        end)
-        eyeBtn:SetScript("OnEnter", ShowEyeTooltip)
-        eyeBtn:SetScript("OnLeave", HideEyeTooltip)
-        eyeBtn:SetScript("OnHide", HideEyeTooltip)
-        SkinControlFeedback(eyeBtn, eyeTex)
+    if topBar and slotOverlay then
+        eyeBtn = ns.ForeverBuildItemTextEye(slotOverlay:GetParent(), topBar, slotOverlay, ilvlOverlay,
+            "foreverItemTextHidden")
     end
     local scene = _G.CharacterModelScene
     local cameraButtons = scene and SkinModelControls(scene, eyeBtn, WSkin)
     if eyeBtn and topBar then
         -- The native camera layout must never loop over its own anchor (the eye).
-        SkinHeaderHover(frame, topBar, { eyeBtn, unpack(cameraButtons or {}) }, close)
+        ns.ForeverSkinHeaderHover(frame, topBar, { eyeBtn, unpack(cameraButtons or {}) }, close)
     end
     HookSlotUpdates()
 
