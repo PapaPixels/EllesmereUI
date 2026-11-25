@@ -218,10 +218,6 @@ WSkin.Restrip = Restrip
 -------------------------------------------------------------------------------
 local _shells = {}   -- winKey -> { frame = f } (strong: permanent frames)
 
-local BG_ASPECT = 561 / 433
-local BASE_L, BASE_R, BASE_T, BASE_B = 0.25, 1, 0, 0.75
-local BASE_U, BASE_V = BASE_R - BASE_L, BASE_B - BASE_T
-
 local function ApplyShellStyle(winKey)
     local entry = _shells[winKey]
     if not entry then return end
@@ -469,27 +465,30 @@ function WSkin.AdoptShell(winKey, frame, atlasTex, overlayTex)
     ApplyShellStyle(winKey)
 end
 
--- Cover-fit the shell backdrop into a fw x fh rect: native aspect 561x433,
--- centred crop of the overflow, never stretched. Pure, no hooks: Shell calls
--- it from its size hook; the Friends module calls it when it paints.
-function WSkin.CoverFit(tex, fw, fh)
-    -- SECRECY TEST FIRST. `fw == 0` is itself a COMPARISON, so on a frame
-    -- whose size is secret (any window sized from widget content -- the
-    -- delve picker and the choice windows both are) it throws before a
-    -- later issecretvalue guard could reject it:
-    --   "attempt to compare local 'fw' (a secret number value)"
-    if issecretvalue(fw) or issecretvalue(fh) then return end
-    if not fw or fw == 0 or not fh or fh == 0 then return end
-    local fa = fw / fh
-    if fa > BG_ASPECT then
-        local visV = BASE_V * (BG_ASPECT / fa)
-        local trimV = (BASE_V - visV) / 2
-        tex:SetTexCoord(BASE_L, BASE_R, BASE_T + trimV, BASE_B - trimV)
-    else
-        local visU = BASE_U * (fa / BG_ASPECT)
-        local trimU = (BASE_U - visU) / 2
-        tex:SetTexCoord(BASE_L + trimU, BASE_R - trimU, BASE_T, BASE_B)
+-- The house atlas occupies a subrectangle. Other backdrops use their full image.
+function WSkin.CoverFit(tex, w, h, aspect)
+    if issecretvalue(w) or issecretvalue(h) or not w or not h or w <= 0 or h <= 0 then return end
+    local left, right, top, bottom = 0, 1, 0, 1
+    if not aspect then
+        aspect, left, bottom = 561 / 433, 0.25, 0.75
     end
+    local ratio = w / h
+    if ratio > aspect then
+        local trim = (bottom - top) * (1 - aspect / ratio) / 2
+        top, bottom = top + trim, bottom - trim
+    else
+        local trim = (right - left) * (1 - ratio / aspect) / 2
+        left, right = left + trim, right - trim
+    end
+    EUI.SetRoundedBodyTexCoord(tex, left, right, top, bottom)
+end
+
+function WSkin.FitBackdropOnResize(frame, tex, aspect)
+    local function Fit(_, w, h)
+        WSkin.CoverFit(tex, w, h, aspect)
+    end
+    frame:HookScript("OnSizeChanged", Fit)
+    Fit(frame, frame:GetSize())
 end
 
 -- Full shell build for a window pack: fade Blizzard art, lay both backdrop
@@ -514,18 +513,7 @@ function WSkin.Shell(winKey, frame, opts)
         overlay:SetAllPoints(frame)
         d.bgOverlay = overlay
 
-        -- Cover-fit: crop the atlas so it fills the frame without stretching.
-        local function UpdateBgTexCoords()
-            -- A resizable shell may already carry its window-corner mask.
-            local mask = bg:GetNumMaskTextures() == 1 and bg:GetMaskTexture(1)
-            if mask then bg:RemoveMaskTexture(mask) end
-            WSkin.CoverFit(bg, frame:GetSize())
-            if mask then bg:AddMaskTexture(mask) end
-        end
-        -- One script hook instead of three setter hooks: it also fires for
-        -- anchor-driven resizes the setters never saw.
-        frame:HookScript("OnSizeChanged", UpdateBgTexCoords)
-        UpdateBgTexCoords()
+        WSkin.FitBackdropOnResize(frame, bg)
 
         -- Black top bar behind the window title. Sits above both style backdrops
         -- (-8/-7/-6) and below all content and the border overlay. opts.noTopBar skips
@@ -1110,16 +1098,14 @@ end
 -- Keep the original icon crop and border at radius zero. Only a plain
 -- four-line edge needs a temporary PP ring for the aura renderer.
 local windowIcons = setmetatable({}, { __mode = "k" })
-local function PaintIconCorners(icon)
-    local d = windowIcons[icon]
-    local db = EllesmereUIDB
-    local style = db and db.blizzWinBorderTexture
-    local radius = style and EUI.RoundedStyleOK(style) and db.blizzWinIconCornerRadius or 0
+-- Flyout tiles pass their temporary artwork and border through the same painter.
+function WSkin.PaintIconCorners(icon, d, style, border, softOwner, corners)
+    local radius = style and EUI.RoundedStyleOK(style) and EllesmereUIDB.blizzWinIconCornerRadius or 0
     local st = d.auraRound
     local nativeMask, highlight = d.iconNativeMask, d.iconHighlight
     if radius <= 0 and not (st and st.on) and not nativeMask and not d.iconSoftBorder then return end
     if icon:IsForbidden() then return end
-    local owner = icon:GetParent()
+    local owner = d.iconBounds or icon:GetParent()
     if not owner or owner:IsForbidden() then return end
     if InCombatLockdown() then
         ns.CombatQueue.Defer("WindowIconCorners", WSkin.RefreshIconCorners)
@@ -1162,22 +1148,14 @@ local function PaintIconCorners(icon)
             radius = 0
         end
     end
-    local border = d.iconBorder
-    local cell = border and windowBorders[border]
-    local corners = cell and cell.windowIconCorners
-    if cell and cell.windowIconCell then
-        if radius > 0 and (style == "glow" or style == "shadow")
-            and (cell.windowItemQuality or cell.windowModeTab) and cell.windowCustomBorder then
-            EUI.RoundCorners(border, radius, {
-                border = cell.windowCustomBorder, style = style, roots = noRoots, corners = corners,
-            })
-            d.iconSoftBorder = border
-        elseif d.iconSoftBorder then
-            EUI.RoundCorners(d.iconSoftBorder, 0)
-            d.iconSoftBorder = nil
-        end
-        border = style == "solid" and cell.windowCustomBorder
+    if softOwner and border and radius > 0 then
+        EUI.RoundCorners(softOwner, radius, { border = border, style = style, roots = noRoots, corners = corners })
+        d.iconSoftBorder = softOwner
+    elseif d.iconSoftBorder then
+        EUI.RoundCorners(d.iconSoftBorder, 0)
+        d.iconSoftBorder = nil
     end
+    if softOwner then border = nil end
     if radius > 0 and not border and d.iconLines then
         if not d.roundIconBorder then
             local host = CreateFrame("Frame", nil, owner)
@@ -1195,7 +1173,7 @@ local function PaintIconCorners(icon)
             local ring = EUI.PP.GetBorders(border)
             if not ring or not ring._snapEdge or ring._snapEdge <= 0 then border = nil end
         end
-        local rect = border or icon
+        local rect = d.iconBounds or border or icon
         local ok
         ok, w, h = pcall(rect.GetSize, rect)
         if not ok or issecretvalue(w) or issecretvalue(h) or not w or not h or w <= 0 or h <= 0 then return end
@@ -1208,17 +1186,36 @@ local function PaintIconCorners(icon)
         if d.iconEffects then
             for _, effect in ipairs(d.iconEffects) do EUI.MaskRoundedIconLayer(st, effect) end
         end
-        if cell and cell.windowIconCell then
-            EUI.MaskRoundedIconLayer(st, owner.GetPushedTexture and owner:GetPushedTexture())
-            EUI.MaskRoundedIconLayer(st, owner.GetDisabledTexture and owner:GetDisabledTexture())
-            EUI.MaskRoundedIconLayer(st, owner.GetHighlightTexture and owner:GetHighlightTexture())
-            if owner.Portrait ~= icon then EUI.MaskRoundedIconLayer(st, owner.Portrait) end
-        end
     end
     if d.iconLines then
         for _, line in ipairs(d.iconLines) do line:SetShown(not st) end
     end
     if d.roundIconBorder then d.roundIconBorder:SetShown(st ~= nil and border == d.roundIconBorder) end
+    return st
+end
+
+local function PaintRegisteredIcon(icon)
+    local d = windowIcons[icon]
+    local style = EllesmereUIDB and EllesmereUIDB.blizzWinBorderTexture
+    local host = d.iconBorder
+    local cell = host and windowBorders[host]
+    local border, softOwner = host
+    if cell and cell.windowIconCell then
+        border = nil
+        if style == "solid" then
+            border = cell.windowCustomBorder
+        elseif (style == "glow" or style == "shadow") and (cell.windowItemQuality or cell.windowModeTab) then
+            border, softOwner = cell.windowCustomBorder, host
+        end
+    end
+    local st = WSkin.PaintIconCorners(icon, d, style, border, softOwner, cell and cell.windowIconCorners)
+    if st and cell and cell.windowIconCell then
+        local owner = icon:GetParent()
+        EUI.MaskRoundedIconLayer(st, owner.GetPushedTexture and owner:GetPushedTexture())
+        EUI.MaskRoundedIconLayer(st, owner.GetDisabledTexture and owner:GetDisabledTexture())
+        EUI.MaskRoundedIconLayer(st, owner.GetHighlightTexture and owner:GetHighlightTexture())
+        if owner.Portrait ~= icon then EUI.MaskRoundedIconLayer(st, owner.Portrait) end
+    end
 end
 
 function WSkin.RefreshIconCorners()
@@ -1226,7 +1223,7 @@ function WSkin.RefreshIconCorners()
         ns.CombatQueue.Defer("WindowIconCorners", WSkin.RefreshIconCorners)
         return
     end
-    for icon in pairs(windowIcons) do PaintIconCorners(icon) end
+    for icon in pairs(windowIcons) do PaintRegisteredIcon(icon) end
 end
 
 function WSkin.RegisterWindowIcon(icon, border, background, highlight, nativeMask, squareMask, effects)
@@ -1239,7 +1236,7 @@ function WSkin.RegisterWindowIcon(icon, border, background, highlight, nativeMas
     if effects then d.iconEffects = effects end
     if nativeMask and not d.iconNativeMask then d.iconNativeMask, d.iconBaseMask = nativeMask, nativeMask end
     if squareMask then d.iconSquareMask = squareMask end
-    PaintIconCorners(icon)
+    PaintRegisteredIcon(icon)
 end
 
 -- Some client textures reject a new crop while masked. Lift only our own
@@ -1343,7 +1340,7 @@ end
 -- pooled tiles correct without any pack having to guess when Blizzard
 -- repopulates them. Pass r,g,b for surfaces that have no ring to read
 -- (the loot roll popups carry quality in an ATLAS NAME instead).
-function WSkin.QualityBorder(owner, icon, r, g, b)
+local function ApplyQualityBorder(owner, icon, r, g, b)
     if not (owner and icon) then return end
     -- Same hazard as every other frame-creating helper here: CreateFrame on a
     -- forbidden owner THROWS, and callers are pcall-isolated per WINDOW, so an
@@ -1381,12 +1378,11 @@ function WSkin.QualityBorder(owner, icon, r, g, b)
         PP.CreateBorder(host, 0, 0, 0, 1, 1, "OVERLAY", 7)
         d.qBorder = host
     end
-    if windowIcons[icon] then WSkin.RegisterWindowIcon(icon, host) end
     if r then
         _qTiles[owner] = nil
         if PP.SetBorderColor then PP.SetBorderColor(host, r, g, b, 1) end
         EUI.RoundedBorderColor(host, r, g, b, 1)
-        return
+        return host
     end
     _qTiles[owner] = host
 
@@ -1414,6 +1410,12 @@ function WSkin.QualityBorder(owner, icon, r, g, b)
         hooksecurefunc("SetItemButtonQuality", OnItemButtonQuality)
     end
     PaintQuality(owner)
+    return host
+end
+
+function WSkin.QualityBorder(owner, icon, r, g, b)
+    local host = ApplyQualityBorder(owner, icon, r, g, b)
+    if host and windowIcons[icon] then WSkin.RegisterWindowIcon(icon, host) end
 end
 
 -- One quest-style reward tile: drop the parchment name plate and every ring
@@ -1587,14 +1589,13 @@ function WSkin.SquareIcon(icon, parent, quality)
     -- native, same as the counted case.
     if not WSkin.SetIconCrop(icon, 0.08) then return end
     if btn then ItemCrop.Keep(btn, icon) end
-    if parent then
-        if quality then
-            WSkin.QualityBorder(parent, icon)
-        else
-            WSkin.BorderRegion(parent, icon, true)
-        end
+    local border
+    if parent and quality then
+        border = ApplyQualityBorder(parent, icon)
+    elseif parent then
+        WSkin.BorderRegion(parent, icon, true)
     end
-    WSkin.RegisterWindowIcon(icon, quality and parent and GetFFD(parent).qBorder or nil)
+    WSkin.RegisterWindowIcon(icon, border)
     return true
 end
 

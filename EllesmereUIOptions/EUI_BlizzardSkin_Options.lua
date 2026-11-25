@@ -1554,7 +1554,7 @@ initFrame:SetScript("OnEvent", function(self)
         local function GetIconZoom()
             return (EllesmereUIDB and EllesmereUIDB.charSheetIconZoom) or iconZoomDefault
         end
-        local iconZoomCfg = csGate({ type="slider", text="Icon Zoom", min=math.min(iconZoomDefault, GetIconZoom()), max=0.20, step=0.01,
+        local iconZoomCfg = csGate({ type="slider", text="Icon Zoom", min=0, max=0.20, step=0.01,
               tooltip="Crops the border of the equipment-slot item icons on the themed character and inspect sheets.",
               getValue=GetIconZoom,
               setValue=function(v)
@@ -2845,18 +2845,12 @@ initFrame:SetScript("OnEvent", function(self)
     local function WSLook(key)
         return EllesmereUIDB and EllesmereUIDB[key]
     end
-    local function AdoptGlobalWindowBackground()
-        if EllesmereUIDB and EllesmereUIDB.blizzWindowLegacyBackgrounds then
-            EllesmereUIDB.blizzWindowLegacyBackgrounds = nil
-            ns.WSkin.RefreshStyles()
-        end
-    end
     local function WSLookSet(key, field, v)
         if not EllesmereUIDB then EllesmereUIDB = {} end
         local t = EllesmereUIDB[key]
         if not t then t = {}; EllesmereUIDB[key] = t end
         t[field] = v
-        AdoptGlobalWindowBackground()
+        if field == "color" then t.useCustom = true end
         if EllesmereUI._WSkinRefreshLooks then EllesmereUI._WSkinRefreshLooks() end
     end
 
@@ -2877,7 +2871,6 @@ initFrame:SetScript("OnEvent", function(self)
             end,
             function(r, g, b)
                 WSLookSet(key, "color", { r = r, g = g, b = b })
-                WSLookSet(key, "useCustom", true)
                 EllesmereUI:RefreshPage()
             end,
             false, 20)
@@ -3486,9 +3479,8 @@ initFrame:SetScript("OnEvent", function(self)
 
     -- Applies a style to one window. Returns true when the change crosses the
     -- on/off boundary, or the character sheet's Blizz Default one (= needs a
-    -- reload). suppressPopup lets Apply to All show one popup for the whole
-    -- batch instead of one per window.
-    local function WSSetStyle(win, style, suppressPopup)
+    -- reload). Apply to All refreshes once after writing the whole batch.
+    local function WSSetStyle(win, style, batch)
         local old = WSGetStyle(win)
         if old == style then return false end
         if not EllesmereUIDB then EllesmereUIDB = {} end
@@ -3506,11 +3498,11 @@ initFrame:SetScript("OnEvent", function(self)
         local oldClass = (old == "off" and 0) or (old == "blizzard" and 1) or 2
         local newClass = (style == "off" and 0) or (style == "blizzard" and 1) or 2
         local crossed = win.reloadMsg ~= nil and oldClass ~= newClass
-        if EllesmereUI._WSkinRefreshStyles then EllesmereUI._WSkinRefreshStyles() end
-        if crossed and not suppressPopup then
-            WSReloadPopup(win.reloadMsg)
+        if not batch then
+            ns.WSkin.RefreshStyles()
+            if crossed then WSReloadPopup(win.reloadMsg) end
         end
-        return crossed
+        return crossed, true
     end
 
     -- A card's style as a dropdown row on another page (Action Bars' Menu,
@@ -4059,12 +4051,16 @@ initFrame:SetScript("OnEvent", function(self)
         PP.Point(applyBtn, "LEFT", allDD, "RIGHT", 10, 0)
         applyBtn:SetFrameLevel(parent:GetFrameLevel() + 3)
         EllesmereUI.MakeStyledButton(applyBtn, "Apply to All", 12, EllesmereUI.WB_COLOURS, function()
-            AdoptGlobalWindowBackground()
-            local crossed = false
+            local changed, crossed = false, false
             for _, win in ipairs(WINDOWS) do
                 local style = (_wsApplyAllStyle == "off" and win.blizzDefault) or _wsApplyAllStyle
-                if not WSStyleOwned(win) and WSSetStyle(win, style, true) then crossed = true end
+                if not WSStyleOwned(win) then
+                    local needsReload, didChange = WSSetStyle(win, style, true)
+                    changed = changed or didChange
+                    crossed = crossed or needsReload
+                end
             end
+            if changed then ns.WSkin.RefreshStyles() end
             EllesmereUI:RefreshPage()
             if crossed then
                 WSReloadPopup("Changing window skin styles requires a UI reload to fully apply.")
@@ -4077,10 +4073,7 @@ initFrame:SetScript("OnEvent", function(self)
         local function borderOff() return not db.blizzWinBorderTexture end
         local function radiusOff() return not EllesmereUI.RoundedStyleOK(db.blizzWinBorderTexture) end
         local radiusTooltip = "This option requires the Solid, Glow or Shadow border style."
-        local function refreshBorder()
-            AdoptGlobalWindowBackground()
-            ns.WSkin.RefreshBorders()
-        end
+        local refreshBorder = ns.WSkin.RefreshBorders
         local values = EllesmereUI.GetBorderTextureDropdown()
         values.default = "EllesmereUI"
         local borderRow
@@ -4104,7 +4097,6 @@ initFrame:SetScript("OnEvent", function(self)
                   get = function() return db.blizzWinCornerRadius or 0 end,
                   set = function(v)
                       db.blizzWinCornerRadius = v
-                      AdoptGlobalWindowBackground()
                       ns.WSkin.RefreshFrameCorners()
                   end },
                 { type = "slider", label = "Icon Corner Radius", min = 0, max = EllesmereUI.ROUNDED_MAX_RADIUS, step = 1,
@@ -4112,7 +4104,6 @@ initFrame:SetScript("OnEvent", function(self)
                   get = function() return db.blizzWinIconCornerRadius or 0 end,
                   set = function(v)
                       db.blizzWinIconCornerRadius = v
-                      AdoptGlobalWindowBackground()
                       ns.WSkin.RefreshIconCorners()
                   end },
             },

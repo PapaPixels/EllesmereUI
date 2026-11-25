@@ -97,9 +97,6 @@ end
 --  Primitive skinners
 -------------------------------------------------------------------------------
 
--- Cover-fit modern_blizz atlas backdrop (matches CharacterSheet). Used for the
--- PVEFrame shell only.
-local BG_ASPECT = 561 / 433
 local function SkinAtlasPanel(frame)
     if not frame or frame:IsForbidden() then return end
     local d = GetFFD(frame)
@@ -132,29 +129,7 @@ local function SkinAtlasPanel(frame)
         topBar:SetHeight(25)
         d.topBar = topBar
 
-        local BASE_L, BASE_R, BASE_T, BASE_B = 0.25, 1, 0, 0.75
-        local BASE_U, BASE_V = BASE_R - BASE_L, BASE_B - BASE_T
-        local function UpdateBgTexCoords()
-            local fw, fh = frame:GetSize()
-            -- Secrecy test BEFORE the zero check: that check is itself a
-            -- comparison and throws on a secret size. Matches the engine.
-            if issecretvalue and (issecretvalue(fw) or issecretvalue(fh)) then return end
-            if fw == 0 or fh == 0 then return end
-            local fa = fw / fh
-            if fa > BG_ASPECT then
-                local visV = BASE_V * (BG_ASPECT / fa)
-                local trimV = (BASE_V - visV) / 2
-                bg:SetTexCoord(BASE_L, BASE_R, BASE_T + trimV, BASE_B - trimV)
-            else
-                local visU = BASE_U * (fa / BG_ASPECT)
-                local trimU = (BASE_U - visU) / 2
-                bg:SetTexCoord(BASE_L + trimU, BASE_R - trimU, BASE_T, BASE_B)
-            end
-        end
-        -- One script hook instead of three setter hooks; also fires for
-        -- anchor-driven resizes (same shape as WSkin.Shell).
-        frame:HookScript("OnSizeChanged", UpdateBgTexCoords)
-        UpdateBgTexCoords()
+        ns.WSkin.FitBackdropOnResize(frame, bg)
     end
     if ns.WSkin and ns.WSkin.AdoptShell then
         ns.WSkin.AdoptShell("lfg", frame, d.bg, d.bgOverlay)

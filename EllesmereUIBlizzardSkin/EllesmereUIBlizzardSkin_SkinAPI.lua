@@ -10,10 +10,7 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --   - The facade is the public surface, never raw ns.WSkin. Entries are
 --     late-bound pass-throughs, so engine internals stay free to change;
 --     facade signatures are additive-only, versioned by S.apiVersion.
---   - Style is OUR concern, invisible to the dev: S.Shell resolves through
---     the "tp:<name>" virtual winKey -> EllesmereUI.GetThirdPartySkinStyle()
---     majority vote (most windows Modern -> modern, else EUI). Registered
---     shells live-restyle through the normal RefreshStyles path.
+--   - S.Shell follows the global window background through its "tp:<name>" key.
 --   - Third-party skinning is decoupled from the window-skin kill switch and
 --     from every per-window enable: it has its own master + per-addon
 --     toggles (account-global, on by default). Skins install at load, so

@@ -201,6 +201,17 @@ local function RemoveMask(tex, m)
     pcall(tex.RemoveMaskTexture, tex, m)
 end
 
+-- A body texture can reject crop changes while its rounding mask is attached.
+function EllesmereUI.SetRoundedBodyTexCoord(tex, left, right, top, bottom)
+    local count = tex:GetNumMaskTextures()
+    local mask = count == 1 and tex:GetMaskTexture(1)
+    if count > 0 and not ownTex[mask] then return end
+    if mask then tex:RemoveMaskTexture(mask) end
+    local ok = pcall(tex.SetTexCoord, tex, left, right, top, bottom)
+    if mask then tex:AddMaskTexture(mask) end
+    return ok
+end
+
 local function SetRounded(obj, radius, corners, wrap)
     obj:SetTexture(ROUNDED[radius * 16 + corners], wrap, wrap)
     obj:SetTextureSliceMargins(radius, radius, radius, radius)
@@ -292,6 +303,7 @@ local function MaskBody(st, roots, singles, radius, cont, skip)
     local m = st.mask
     if not m then
         m = st.owner:CreateMaskTexture()
+        ownTex[m] = true
         st.mask = m
         st.kRadius = nil
     end

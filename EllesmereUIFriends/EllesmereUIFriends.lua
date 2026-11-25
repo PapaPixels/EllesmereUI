@@ -1274,7 +1274,11 @@ local function PaintChrome()
             ws.CoverFit(bg, frame:GetSize())
             bg:SetVertexColor(CHROME.DARKEN, CHROME.DARKEN, CHROME.DARKEN, 1)
         else
-            bg:SetTexCoord(0, 1, 0, 1)
+            if EllesmereUI.SetRoundedBodyTexCoord then
+                EllesmereUI.SetRoundedBodyTexCoord(bg, 0, 1, 0, 1)
+            else
+                bg:SetTexCoord(0, 1, 0, 1)
+            end
             bg:SetVertexColor(1, 1, 1, 1)
             if style == "modern" then
                 bg:SetColorTexture(seen.r, seen.g, seen.b, seen.a)

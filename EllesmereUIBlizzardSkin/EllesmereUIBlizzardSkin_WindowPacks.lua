@@ -11795,15 +11795,9 @@ end
 -- The window border's picked color, for Poor/Common icons under Icon Borders. nil while the border is Default.
 local function LootWindowColor()
     local db = EllesmereUIDB
-    if not (db and db.lootWindowBorderTexture) then return nil end
-    local mode = db.lootWindowBorderColorMode or "custom"
-    if mode == "accent" then return EllesmereUI.ELLESMERE_GREEN end
-    if mode == "class" then
-        local _, class = UnitClass("player")
-        return class and RAID_CLASS_COLORS[class]
-    end
-    if mode == "quality" then return db.lootWindowBorderQualityColor or LOOT_WHITE end
-    return db.lootWindowBorderColor or LOOT_WHITE
+    if not db or not (db.blizzWinBorderTexture or db.lootWindowBorderTexture) then return end
+    if db.lootWindowBorderColorMode == "quality" then return LootQualityColor(nil) end
+    return ns.ConfiguredBorderColor(db, db.blizzWinBorderTexture and "blizzWin" or "lootWindow")
 end
 
 -- Quality mode follows the loot as it is taken: Blizzard hides a looted row with no list
@@ -11946,6 +11940,7 @@ local function Skin_Loot()
                 end
                 -- Loot Window card's Icon Borders: the picked style and size, still in the quality color.
                 local db = EllesmereUIDB
+                idd.commonLootBorder = db and db.lootIconBorder and not isQuality
                 if db and db.lootIconBorder then
                     -- Poor/common take the window border's color (black while that border is Default).
                     if not isQuality then
@@ -12074,13 +12069,23 @@ local function Skin_Loot()
 end
 
 function WSkin.RefreshLootWindowBorder()
-    if lootSkinned and _G.LootFrame then ApplyLootBorder(_G.LootFrame) end
+    local f = _G.LootFrame
+    if not (lootSkinned and f) then return end
+    ApplyLootBorder(f)
+    if not (EllesmereUIDB.lootIconBorder and f:IsShown() and f.ScrollBox and f.ScrollBox.ForEachFrame) then return end
+    local color = LootWindowColor()
+    f.ScrollBox:ForEachFrame(function(row)
+        if row:IsForbidden() then return end
+        local d = FFD[row.Item or row]
+        if d and d.commonLootBorder then
+            EllesmereUI.SetBorderStyleColor(d.qBorder, color and color.r or 0, color and color.g or 0, color and color.b or 0, 1)
+        end
+    end)
 end
 
 EllesmereUI._Loot_RefreshBorder = function()
     local f = _G.LootFrame
     if not (lootSkinned and f) then return end
-    -- Open: a full pass also restyles the icon borders. Closed: the next open does that.
     if f:IsShown() then Skin_Loot() else ApplyLootBorder(f) end
 end
 

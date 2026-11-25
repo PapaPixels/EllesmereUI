@@ -61,11 +61,11 @@ end
 
 ## Which theme does the user get?
 
-You never choose. EUI resolves it from the user's own window-skin settings:
-if most of their Blizzard windows use the Modern flat-color style your addon
-gets Modern, otherwise it gets the EllesmereUI style. The two differ only in
-the `S.Shell` backdrop; every other primitive looks identical in both. Style
-changes the user makes apply to your frames live where possible.
+The user's **Background Style** setting controls the backdrop drawn by
+`S.Shell`. `S.GetStyle()` returns `"modern"` for Custom Color and `"eui"` for
+EllesmereUI. Accounts with a mix of older per-window styles keep the previous
+majority choice until the user edits the global background. Registered shells
+update live.
 
 ## Reference
 
@@ -121,7 +121,7 @@ end
 |---|---|
 | `S.Font(fontString [, r, g, b])` | Re-fonts a FontString to the user's chosen UI font, same size. Optional color. |
 | `S.White(fontString [, r, g, b])` | Color-only (default white); font untouched. |
-| `S.ApplyBarFill(statusBar)` | The house StatusBar fill (user-configurable color/opacity, kept in sync). |
+| `S.ApplyBarFill(statusBar)` | Applies the global bar color, opacity, and optional texture. Clearing the texture restores the original artwork. |
 
 ### State and theme queries
 

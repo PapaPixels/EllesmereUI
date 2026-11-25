@@ -1,63 +1,6 @@
 if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_ClientGate.lua)
---------------------------------------------------------------------------------
---  Character Sheet on WoW Forever
---
---  The retail character sheet gets the full makeover
---  (EllesmereUIBlizzardSkin_CharacterSheet.lua); that file stands down on the
---  Forever client and this one gives the sheet the ordinary window-skin
---  treatment instead, on Blizzard's own Forever frame:
---    - the standard window shell (dark backdrop, border, top bar) and the
---      house close button, through the same engine calls every skinned
---      Blizzard window uses;
---    - every piece of frame art stripped: the pane backdrops and stone
---      header, the item slot frames, the class icon and its ring, the rock
---      strip under the level line, and the stock model controls;
---    - the retail sheet's model backdrop behind the character, cover-cropped
---      to the model area, and the retail sidebar's darker panel behind the
---      stats, with themed dividers under the title and between the panes;
---    - the item slots as on retail: icons cropped by the Icon Zoom setting,
---      a grey square behind each and the configured window border, with
---      the default rarity-colored edge following Blizzard's per-slot update;
---    - text beside each slot where retail shows its item level and upgrade
---      track: the item level (Show Item Level: beside the slot unless set,
---      or inside its icon, or never) and, with Show Item Stats on (off
---      unless turned on), the item's main and secondary stat, or its armor
---      when it has no stats, and a weapon's damage per second under that;
---      the enchant name under those, painted through the same per-slot
---      update; the top-left eyeball toggles it for the current character;
---    - the character name and the "Level N Class" line in the house font,
---      as on retail (Blizzard keeps writing the text, so the class color
---      and the pvp title still come from the client);
---    - the stats list stays Blizzard's list on Blizzard's scrollbar, whose
---      track and thumb appear on hover, and its bottom fades when more rows
---      can be scrolled into view. The sidebar tabs use text labels;
---      its category headers and values take the retail sidebar's color
---      system (per-category colors, the user's overrides from the options
---      page, the thin header bars) through the scroll box's own frame
---      callbacks, never by touching its data;
---    - the overall item level (the equipped average) on a line of its own
---      above the player's stats, as on retail.
---
---  All of this is the EllesmereUI look (the Character Sheet card's
---  EllesmereUI and Modern). Under the card's Blizz Default only the slot text
---  stays, on Blizzard's own sheet: the same lines through the same per-slot
---  update, set further out so they clear Blizzard's bronze slot frames. The
---  outer weapon slots' lines start lower (under the columns' bottom slot
---  frames) and the middle weapon slot's lines stack above it, running left
---  from its right edge (the frame border leaves no room under it), clear of
---  the columns' own text; weapon lines too long for their room are cut
---  short. No eyeball there: that corner is Blizzard's portrait.
---  The card's Off and the window skins kill switch stop both looks.
---
---  Cost: a one-time pass at login on frames that already exist (under Blizz
---  Default, a one-time text build at the slots' first show instead), then a
---  recolor per element initialisation (what Blizzard does anyway on each
---  stats refresh) and one color compare plus one item-link compare per slot
---  update (Blizzard's own, only while the slots are shown). The one event of
---  our own, GET_ITEM_INFO_RECEIVED, is registered only while a shown slot
---  waits on item data the client has not cached yet. Nothing at all while the
---  card is Off.
---------------------------------------------------------------------------------
+-- Forever paper doll, equipment pane, and shared inspect-slot artwork.
+-- Blizz Default keeps the native sheet with optional slot text and durability.
 local ADDON_NAME, ns = ...
 local EllesmereUI = _G.EllesmereUI
 if not (EllesmereUI and EllesmereUI.IS_FOREVER) then return end
@@ -1038,10 +981,12 @@ local function HookSlotUpdates()
     if slotHooked or type(_G.PaperDollItemSlotButton_Update) ~= "function" then return end
     slotHooked = true
     hooksecurefunc("PaperDollItemSlotButton_Update", OnSlotUpdate)
-    hooksecurefunc("SetItemButtonQuality", function(slot)
-        local d = FFD[slot]
-        if d and d.skinnedSlotChrome then HideSlotTexture(slot.IconBorder) end
-    end)
+    if Enabled() then
+        hooksecurefunc("SetItemButtonQuality", function(slot)
+            local d = FFD[slot]
+            if d and d.skinnedSlotChrome then HideSlotTexture(slot.IconBorder) end
+        end)
+    end
 end
 
 -- One slot's dress, the same on this sheet and on the inspect sheet
@@ -1159,23 +1104,6 @@ end
 --  The model backdrop and the sidebar panel, as on retail
 --------------------------------------------------------------------------------
 local IMG_ASPECT = 787 / 1030   -- character-bg.png
-
-local function CoverCrop(tex, w, h)
-    if issecretvalue and (issecretvalue(w) or issecretvalue(h)) then return end
-    if not w or not h or w <= 0 or h <= 0 then return end
-    local aspect = w / h
-    -- This texture only takes the shared window mask. Lift it while cropping.
-    local mask = tex:GetNumMaskTextures() > 0 and tex:GetMaskTexture(1)
-    if mask then tex:RemoveMaskTexture(mask) end
-    if aspect > IMG_ASPECT then
-        local trim = (1 - IMG_ASPECT / aspect) / 2
-        tex:SetTexCoord(0, 1, trim, 1 - trim)
-    else
-        local trim = (1 - aspect / IMG_ASPECT) / 2
-        tex:SetTexCoord(trim, 1 - trim, 0, 1)
-    end
-    if mask then tex:AddMaskTexture(mask) end
-end
 
 -- Both panels draw above the shell's top bar (children of the frame render
 -- over its own textures), so their top edge is pinned to the bar's bottom:
@@ -1299,6 +1227,10 @@ local function SkinModelControls(scene, eye, WSkin)
         if not InputUtil.IsGamepadUIEnabled() then control:Show() end
     end
     local function Layout()
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverModelControls", Layout)
+            return
+        end
         for i, button in ipairs(buttons) do
             button:ClearAllPoints()
             button:SetPoint("LEFT", control, "LEFT", (i - 1) * CONTROL_WIDTH, 0)
@@ -1368,8 +1300,7 @@ local function ModelBackdrop(frame, topBar)
     local tex = host:CreateTexture(nil, "BACKGROUND")
     tex:SetAllPoints(host)
     tex:SetTexture(MEDIA .. "character-bg.png")
-    host:SetScript("OnSizeChanged", function(_, w, h) CoverCrop(tex, w, h) end)
-    CoverCrop(tex, host:GetSize())
+    ns.WSkin.FitBackdropOnResize(host, tex, IMG_ASPECT)
     return tex
 end
 
@@ -1506,16 +1437,17 @@ local function BuildModeTabSkin(frame, WSkin)
         if tab:IsProtected() then return end
     end
 
-    -- Clip the whole column, including border and glow artwork outside a tab.
-    local clip = CreateFrame("Frame", nil, frame)
-    clip:SetPoint("TOPLEFT", frame, "TOPRIGHT")
-    clip:SetPoint("BOTTOMLEFT", frame, "BOTTOMRIGHT", 0, -32)
-    clip:SetWidth(host:GetWidth() + 32)
-    clip:SetClipsChildren(true)
+    -- Clip on the native tab container. Keep the tab origin at its stock inset.
     local _, _, _, x, y = host:GetPoint()
-    host:SetParent(clip)
+    local width = host:GetWidth() + 32
     host:ClearAllPoints()
-    host:SetPoint("TOPLEFT", clip, "TOPLEFT", x or 0, y or -30)
+    host:SetPoint("TOPLEFT", frame, "TOPRIGHT")
+    host:SetPoint("BOTTOMLEFT", frame, "BOTTOMRIGHT", 0, -32)
+    host:SetWidth(width)
+    host:SetClipsChildren(true)
+    local origin = CreateFrame("Frame", nil, host)
+    origin:SetSize(1, 1)
+    origin:SetPoint("TOPLEFT", host, "TOPLEFT", x or 0, y or -30)
 
     local scale, overlap, maskExtension = 0.9, 2, 2
     local effects, artwork = {}, {}
@@ -1532,9 +1464,15 @@ local function BuildModeTabSkin(frame, WSkin)
         end
     end
     local function Layout()
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverModeTabLayout", Layout)
+            return
+        end
+        if host:IsProtected() then return end
         local row, step = 0, nil
         for _, tab in ipairs(tabs) do
             if tab:IsShown() then
+                if tab:IsProtected() then return end
                 local pixel = OnePixel(tab)
                 -- Anchor every row to the same origin on the same pixel phase.
                 if not step then
@@ -1542,20 +1480,19 @@ local function BuildModeTabSkin(frame, WSkin)
                     step = math.floor(previousStep + 0.5) + 4
                 end
                 tab:ClearAllPoints()
-                tab:SetPoint("TOPLEFT", host, "TOPLEFT", 0, -row * step * pixel)
+                tab:SetPoint("TOPLEFT", origin, "TOPLEFT", 0, -row * step * pixel)
                 row = row + 1
             end
         end
     end
     hooksecurefunc(frame, "UpdateTabLayout", Layout)
-    clip:SetScript("OnShow", function()
+    host:HookScript("OnShow", function()
         Layout()
-        EllesmereUI.RegisterPxReapply(clip, Layout)
+        EllesmereUI.RegisterPxReapply(origin, Layout)
     end)
-    clip:SetScript("OnHide", function() EllesmereUI.RegisterPxReapply(clip, nil) end)
-    if clip:IsVisible() then EllesmereUI.RegisterPxReapply(clip, Layout) end
-
-    frame:UpdateTabLayout()
+    host:HookScript("OnHide", function() EllesmereUI.RegisterPxReapply(origin, nil) end)
+    if host:IsVisible() then EllesmereUI.RegisterPxReapply(origin, Layout) end
+    Layout()
 
     local previousHouse, previousConfigured
     return function(style)
@@ -1574,7 +1511,7 @@ local function BuildModeTabSkin(frame, WSkin)
             local paint = effects[tab]
             if paint then paint(not house, configured) end
         end
-    end, clip
+    end, host
 end
 
 local function TopLayer(strata, level, owner)
@@ -1624,13 +1561,17 @@ local function BuildDividers(frame, topBar, modelBg, sidebarBg)
     local dockSeam, dockLine
     local function Paint()
         if not border then return end
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverSheetDividers", Paint)
+            return
+        end
         local es = frame:GetEffectiveScale()
         local db = EllesmereUIDB
         local pixelArt = EllesmereUI._pixelArtBorders[style]
         local geometryStyle = pixelArt and "pixels" or style
         local filter = pixelArt and "NEAREST" or nil
         local strata, level = BorderLayer(border)
-        if tabClip then
+        if tabClip and not tabClip:IsProtected() then
             local edge = 0
             if style then
                 local _, reach = EllesmereUI.BorderReach(size, geometryStyle,
@@ -1643,10 +1584,10 @@ local function BuildDividers(frame, topBar, modelBg, sidebarBg)
             tabClip:SetPoint("BOTTOMLEFT", dock or frame, "BOTTOMRIGHT", edge, -32)
             if pixelArt then
                 tabClip:SetFrameStrata(strata)
-                tabClip:SetFrameLevel(level + 4)
+                tabClip:SetFrameLevel(level + 5)
             else
                 tabClip:SetFrameStrata(frame:GetFrameStrata())
-                tabClip:SetFrameLevel(frame:GetFrameLevel() + 1)
+                tabClip:SetFrameLevel(frame:GetFrameLevel() + 2)
             end
         end
         for _, bg in pairs(backgrounds) do
@@ -1839,6 +1780,10 @@ local function SkinPaperDollHeader(WSkin, modelBg, sidebarBg, fontSize)
         for _, entry in ipairs(tabs) do Paint(entry) end
     end
     local function Layout()
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverSidebarTabs", Layout)
+            return
+        end
         local total, count = 0, 0
         for _, entry in ipairs(tabs) do
             if entry.tab:IsShown() then
@@ -2127,28 +2072,10 @@ local function HookEquipmentFlyout(pane, WSkin)
         region:SetAlpha(0)
     end
 
-    local function PaintTileCorners(button, tile, style)
-        local radius = style and EllesmereUI.RoundedStyleOK(style) and EllesmereUIDB.blizzWinIconCornerRadius or 0
-        local border = tile.border
-        local art = tile.art
-        local st = tile.auraRound
-        if radius > 0 then
-            local count = art:GetNumMaskTextures()
-            if count == 0 and st and st.on then
-                EllesmereUI.RoundAuraCorners(button, tile, art, nil, false, 0)
-            elseif count > 0 and not (count == 1 and st and st.on and art:GetMaskTexture(1) == st.mask) then
-                radius = 0
-            end
-        end
-        if radius > 0 and border and (style == "glow" or style == "shadow") then
-            EllesmereUI.RoundCorners(tile.host, radius, { border = border, style = style, roots = {} })
-            tile.softBorder = true
-        elseif tile.softBorder then
-            EllesmereUI.RoundCorners(tile.host, 0)
-            tile.softBorder = nil
-        end
-        if style ~= "solid" or not border or not EllesmereUI.PP.GetBorders(border) then border = false end
-        st = EllesmereUI.RoundAuraCorners(button, tile, art, nil, border, radius, button:GetSize())
+    local function PaintTileCorners(tile, style)
+        local softOwner = (style == "glow" or style == "shadow") and tile.host
+        local border = (softOwner or style == "solid") and tile.border
+        local st = WSkin.PaintIconCorners(tile.art, tile, style, border, softOwner)
         if st then
             EllesmereUI.MaskRoundedIconLayer(st, tile.hover)
             EllesmereUI.MaskRoundedIconLayer(st, tile.flash)
@@ -2162,7 +2089,7 @@ local function HookEquipmentFlyout(pane, WSkin)
         wipe(hidden)
         for button, tile in pairs(tiles) do
             if tile.points and not button:IsProtected() then
-                PaintTileCorners(button, tile)
+                PaintTileCorners(tile)
                 tile.hover:Hide()
                 tile.flash:Hide()
                 if tile.specialIcon then tile.specialIcon:Hide() end
@@ -2231,7 +2158,7 @@ local function HookEquipmentFlyout(pane, WSkin)
             local host = CreateFrame("Frame", nil, button)
             host:SetAllPoints()
             local hover, flash = BuildSlotHover(button, icon)
-            tile = { host = host, icon = icon, art = icon, hover = hover, flash = flash, color = {} }
+            tile = { host = host, iconBounds = button, icon = icon, art = icon, hover = hover, flash = flash, color = {} }
             tiles[button] = tile
         end
         local mask = button.Mask
@@ -2278,7 +2205,7 @@ local function HookEquipmentFlyout(pane, WSkin)
         color.r, color.g, color.b = r, g, b
         local border, size = PaintEquipmentBorder(tile.host, style, WSkin, r and color)
         tile.border = size and size > 0 and border or nil
-        PaintTileCorners(button, tile, style)
+        PaintTileCorners(tile, style)
     end
 
     local function PaintFlyout(nativeUpdate)
@@ -2356,7 +2283,7 @@ local function HookEquipmentFlyout(pane, WSkin)
         local style = EllesmereUIDB.blizzWinBorderTexture
         for button, tile in pairs(tiles) do
             if tile.points and button:IsShown() and not button:IsProtected() then
-                PaintTileCorners(button, tile, style)
+                PaintTileCorners(tile, style)
             end
         end
     end)
@@ -3235,7 +3162,11 @@ local function SkinFrame()
     local Fade = WSkin.FadeRegions
     if not Fade then return false end
     local d = GetFFD(frame)
-    if d.done then return true end
+    if d.done or not Enabled() then return true end
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("ForeverSheetBuild", SkinFrame)
+        return true
+    end
     d.done = true
 
     -- The ordinary window treatment: shell, border, top bar, house close
@@ -3337,20 +3268,19 @@ local function SkinFrame()
             ilvlOverlay:SetAlpha(hidden and 0 or 1)
         end
         ApplyEyeState()
+        local tooltipOpts = { anchor = "right" }
         local function ShowEyeTooltip(self)
-            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-            GameTooltip:SetText(hidden and "Show Item Text" or "Hide Item Text")
-            GameTooltip:Show()
+            EllesmereUI.ShowWidgetTooltip(self, hidden and "Show Item Text" or "Hide Item Text", tooltipOpts)
         end
         local function HideEyeTooltip(self)
-            if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
+            if EllesmereUI._WidgetTooltipOwner() == self then EllesmereUI.HideWidgetTooltip() end
         end
         eyeBtn:SetScript("OnClick", function(self)
             hidden = not hidden
             local entry = EllesmereUI.CharEntry(true)
             if entry then entry.foreverItemTextHidden = hidden end
             ApplyEyeState()
-            if GameTooltip:IsOwned(self) then ShowEyeTooltip(self) end
+            if EllesmereUI._WidgetTooltipOwner() == self then ShowEyeTooltip(self) end
         end)
         eyeBtn:SetScript("OnEnter", ShowEyeTooltip)
         eyeBtn:SetScript("OnLeave", HideEyeTooltip)

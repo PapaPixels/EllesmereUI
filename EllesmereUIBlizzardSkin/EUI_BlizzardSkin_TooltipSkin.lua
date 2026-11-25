@@ -49,25 +49,25 @@ local FFD, GetFFD = I.FFD, I.GetFFD
         return true
     end
 
-    -- Size step, step key, color and opacity of a <prefix>Border* configured border
-    -- colorOverride (optional {r,g,b}): a caller-computed color for loot window's "quality"
+    local WHITE = { r = 1, g = 1, b = 1 }
+    local DEFAULT_ACCENT = { r = 0.27, g = 0.86, b = 0.49 }
+    function ns.ConfiguredBorderColor(db, prefix)
+        local mode = db[prefix .. "BorderColorMode"]
+        if mode == "accent" then return EllesmereUI.ELLESMERE_GREEN or DEFAULT_ACCENT end
+        if mode == "class" then
+            local _, class = UnitClass("player")
+            return RAID_CLASS_COLORS[class] or WHITE
+        end
+        return db[prefix .. "BorderColor"] or WHITE
+    end
+
     local function _resolveConfiguredBorder(prefix, legacySize, colorOverride)
         local db = EllesmereUIDB or {}
         local key = db[prefix .. "BorderThickness"]
         local size = key and (EllesmereUI.BORDER_STEP_OF_LABEL[key] or 1) or (legacySize or 1)
         key = key or EllesmereUI.BORDER_LABEL_OF_STEP[size] or "thin"
         local mode = db[prefix .. "BorderColorMode"] or "custom"
-        local color
-        if colorOverride then
-            color = colorOverride
-        elseif mode == "accent" then
-            color = EllesmereUI.ELLESMERE_GREEN or { r=.27, g=.86, b=.49 }
-        elseif mode == "class" then
-            local _, class = UnitClass("player")
-            color = class and RAID_CLASS_COLORS[class] or { r=1, g=1, b=1 }
-        else
-            color = db[prefix .. "BorderColor"] or { r=1, g=1, b=1 }
-        end
+        local color = colorOverride or ns.ConfiguredBorderColor(db, prefix)
         local alpha = db[prefix .. "BorderOpacity"]
         if alpha == nil then alpha = (mode == "custom") and EllesmereUI.RESKIN.BRD_ALPHA or .5 end
         return db, size, key, color, alpha

@@ -290,7 +290,6 @@ end
 -- frame without distorting: native aspect 561x433, and on resize the tex coords
 -- are recomputed centered, cropping the overflow. Returns bg, overlay.
 function ns.SheetBackdrop(frame)
-    local BG_ASPECT = 561 / 433
     local bg = frame:CreateTexture(nil, "BACKGROUND", nil, -8)
     bg:SetTexture("Interface\\AddOns\\EllesmereUI\\media\\modern_blizz.png")
     bg:SetAllPoints(frame)
@@ -299,30 +298,7 @@ function ns.SheetBackdrop(frame)
     overlay:SetColorTexture(0, 0, 0, 0.62)
     overlay:SetAllPoints(frame)
 
-    local BASE_L, BASE_R, BASE_T, BASE_B = 0.25, 1, 0, 0.75
-    local BASE_U = BASE_R - BASE_L  -- 0.75
-    local BASE_V = BASE_B - BASE_T  -- 0.75
-    local function UpdateBgTexCoords()
-        local fw, fh = frame:GetSize()
-        -- Secrecy test BEFORE the zero check: that check is itself a
-        -- comparison and throws on a secret size. Matches the engine.
-        if issecretvalue and (issecretvalue(fw) or issecretvalue(fh)) then return end
-        if fw == 0 or fh == 0 then return end
-        local frameAspect = fw / fh
-        if frameAspect > BG_ASPECT then
-            local visV = BASE_V * (BG_ASPECT / frameAspect)
-            local trimV = (BASE_V - visV) / 2
-            bg:SetTexCoord(BASE_L, BASE_R, BASE_T + trimV, BASE_B - trimV)
-        else
-            local visU = BASE_U * (frameAspect / BG_ASPECT)
-            local trimU = (BASE_U - visU) / 2
-            bg:SetTexCoord(BASE_L + trimU, BASE_R - trimU, BASE_T, BASE_B)
-        end
-    end
-    -- One script hook instead of three setter hooks; also fires for
-    -- anchor-driven resizes (same shape as WSkin.Shell).
-    frame:HookScript("OnSizeChanged", UpdateBgTexCoords)
-    UpdateBgTexCoords()
+    ns.WSkin.FitBackdropOnResize(frame, bg)
     return bg, overlay
 end
 
@@ -812,7 +788,7 @@ local function PreSkinCharacterSheet()
             local iconTexture = _G[slotName .. "IconTexture"]
             if iconTexture then
                 local z = (EllesmereUIDB and EllesmereUIDB.charSheetIconZoom) or 0.07
-                iconTexture:SetTexCoord(z, z, z, 1 - z, 1 - z, z, 1 - z, 1 - z)
+                ns.WSkin.SetIconCrop(iconTexture, z)
             end
             local normalTexture = _G[slotName .. "NormalTexture"]
             if normalTexture then
@@ -3079,7 +3055,7 @@ local function SkinCharacterSheet()
 
         if slot.icon then
             local z = (EllesmereUIDB and EllesmereUIDB.charSheetIconZoom) or 0.07
-            slot.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+            ns.WSkin.SetIconCrop(slot.icon, z)
         end
 
         local normalTexture = _G[slotName .. "NormalTexture"]
@@ -5067,7 +5043,7 @@ function EllesmereUI._refreshCharSheetIconZoom()
     for _, slotName in ipairs(EUI_ALL_SLOTS) do
         local slot = _G[slotName]
         if slot and slot.icon then
-            slot.icon:SetTexCoord(z, 1 - z, z, 1 - z)
+            ns.WSkin.SetIconCrop(slot.icon, z)
         end
     end
 end
