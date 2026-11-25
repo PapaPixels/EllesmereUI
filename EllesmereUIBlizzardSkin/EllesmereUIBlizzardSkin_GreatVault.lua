@@ -796,9 +796,10 @@ RefreshGreatVaultFrame = function(frame)
     -- bounds extend ~10px past its visible panel, so a border on the frame itself draws
     -- off the panel edge. At half opacity so it sits back against the vault scene.
     if ns.WSkin and ns.WSkin.AtlasBorder then
-        ns.WSkin.AtlasBorder(d.borderOverlay)
+        ns.WSkin.AtlasBorder(d.borderOverlay, frame)
         local ab = ns.WSkin.GetFFD and ns.WSkin.GetFFD(d.borderOverlay).atlasBorderFrame
-        if ab then ab:SetAlpha(0.65) end
+        local edge = ab and ns.WSkin.GetFFD(ab).windowDefaultEdge
+        if edge and edge:IsObjectType("Texture") then edge:SetAlpha(0.65) end
     end
 
     -- Hide Blizzard's border decorations

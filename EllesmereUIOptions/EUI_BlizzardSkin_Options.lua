@@ -27,6 +27,26 @@ initFrame:SetScript("OnEvent", function(self)
     -- any other parent it is a plain new frame.
     local CreateFrame = EllesmereUI._Pool.CreateFrame
 
+    local barMenuCatalog
+    local function BarTextureMenu()
+        if not barMenuCatalog then
+            local tex, names, order = EllesmereUI.BuildBarTextureTables()
+            barMenuCatalog = { tex = tex, names = names, order = order }
+        end
+        local catalog = barMenuCatalog
+        EllesmereUI.AppendSharedMediaTextures(catalog.names, catalog.order, nil, catalog.tex)
+        local values, order = {}, {}
+        for i, key in ipairs(catalog.order) do
+            if key ~= "---" then values[key] = catalog.names[key] or key end
+            order[i] = key
+        end
+        values._menuOpts = {
+            itemHeight = 28,
+            background = function(key) return EllesmereUI.ResolveTexturePath(catalog.tex, key, nil) end,
+        }
+        return values, order
+    end
+
     -- Border rows shared by the Tooltips page and the Loot Window card, over a key prefix's
     -- <prefix>Border* settings (drawn by _applyConfiguredBorder, EUI_BlizzardSkin_TooltipSkin.lua).
     -- The step the skin renders with: the stored label (an unknown one = thin); unset = the
@@ -157,9 +177,24 @@ initFrame:SetScript("OnEvent", function(self)
             UpdSwatchState()
             return sw
         end
-        local accent=AddModeSwatch(right._lastInline or right._control,"accent","Accent Color",function() local c=EllesmereUI.ELLESMERE_GREEN; return c.r,c.g,c.b,1 end,false)
-        local class=AddModeSwatch(accent,"class","Class Color",function() local _,k=UnitClass("player"); local c=RAID_CLASS_COLORS[k]; return c.r,c.g,c.b,1 end,false)
-        local last=AddModeSwatch(class,"custom","Custom Color",function() local c=EllesmereUIDB[prefix.."BorderColor"] or {r=1,g=1,b=1}; return c.r,c.g,c.b,EllesmereUIDB[prefix.."BorderOpacity"] or EllesmereUI.RESKIN.BRD_ALPHA end,true)
+        local function ClassColor()
+            local _, class = UnitClass("player")
+            local c = RAID_CLASS_COLORS[class]
+            return c.r, c.g, c.b, 1
+        end
+        local function CustomColor()
+            local c = EllesmereUIDB[prefix.."BorderColor"] or {r=1,g=1,b=1}
+            return c.r, c.g, c.b, EllesmereUIDB[prefix.."BorderOpacity"] or EllesmereUI.RESKIN.BRD_ALPHA
+        end
+        local last = right._lastInline or right._control
+        if opts and opts.classAndCustom then
+            last = AddModeSwatch(last, "custom", "Custom Color", CustomColor, true)
+            last = AddModeSwatch(last, "class", "Class Color", ClassColor, false)
+        else
+            last=AddModeSwatch(last,"accent","Accent Color",function() local c=EllesmereUI.ELLESMERE_GREEN; return c.r,c.g,c.b,1 end,false)
+            last = AddModeSwatch(last, "class", "Class Color", ClassColor, false)
+            last = AddModeSwatch(last, "custom", "Custom Color", CustomColor, true)
+        end
         local q = opts and opts.quality
         if q then
             last=AddModeSwatch(last,"quality",q.tip,function() local c=EllesmereUIDB[q.key] or {r=1,g=1,b=1}; return c.r,c.g,c.b,EllesmereUIDB[prefix.."BorderOpacity"] or EllesmereUI.RESKIN.BRD_ALPHA end,true,q.key)
@@ -1258,25 +1293,7 @@ initFrame:SetScript("OnEvent", function(self)
 
             _, h = W:SectionHeader(parent, "TIMER BARS", y);  y = y - h
 
-            -- Bar Texture: the shared bar catalogue. The triple lives on ns so the SharedMedia
-            -- appender, which registers by table identity, gets the same tables on every
-            -- build; the dropdown's own lists are made per build, so a texture another addon
-            -- registers later is listed.
-            if not ns.timerBarTex then
-                local tex, names, order = EllesmereUI.BuildBarTextureTables()
-                ns.timerBarTex = { tex = tex, names = names, order = order }
-            end
-            local barTex = ns.timerBarTex
-            EllesmereUI.AppendSharedMediaTextures(barTex.names, barTex.order, nil, barTex.tex)
-            local timerBarTexValues, timerBarTexOrder = {}, {}
-            for _, key in ipairs(barTex.order) do
-                if key ~= "---" then timerBarTexValues[key] = barTex.names[key] or key end
-                timerBarTexOrder[#timerBarTexOrder + 1] = key
-            end
-            timerBarTexValues._menuOpts = {
-                itemHeight = 28,
-                background = function(key) return EllesmereUI.ResolveTexturePath(barTex.tex, key, nil) end,
-            }
+            local timerBarTexValues, timerBarTexOrder = BarTextureMenu()
 
             -- Fill Color (opacity + Custom | Class | Accent) | Background (opacity + color)
             local colorRow
@@ -2514,34 +2531,69 @@ initFrame:SetScript("OnEvent", function(self)
 
         _, h = WSCardSection(parent, "BORDER", y);  y = y - h
 
-        local texValues, texOrder = DefaultableBorderValues()
+        -- Previously customized Loot borders keep their editor under EllesmereUI.
+        -- New borders take their geometry from Global Settings.
+        if EllesmereUIDB.blizzWinBorderTexture or not EllesmereUIDB.lootWindowBorderTexture then
+            local function qualityOff() return EllesmereUIDB.lootWindowBorderColorMode ~= "quality" end
+            local function borderOff() return lootOff() or not EllesmereUIDB.blizzWinBorderTexture end
+            local qualityRow
+            qualityRow, h = W:DualRow(parent, y,
+                { type = "toggle", text = "Quality Color", disabled = borderOff,
+                  disabledTooltip = function() return lootOff() and "Loot Window" or "a custom Border Style" end,
+                  tooltip = "Color the global border by the best item in the loot window.",
+                  getValue = function() return not qualityOff() end,
+                  setValue = function(v)
+                      EllesmereUIDB.lootWindowBorderColorMode = v and "quality" or nil
+                      refresh()
+                  end },
+                EllesmereUI.BlankRowCfg())
+            if not EllesmereUI._prebuilding then
+                EllesmereUI.BuildInlineSwatches(qualityRow._leftRegion, {
+                    { tooltip = "Border color for Poor and Common items.",
+                      getValue = function()
+                          local c = EllesmereUIDB.lootWindowBorderQualityColor
+                          if c then return c.r, c.g, c.b end
+                          return 1, 1, 1
+                      end,
+                      setValue = function(r, g, b)
+                          EllesmereUIDB.lootWindowBorderQualityColor = { r = r, g = g, b = b }
+                          refresh()
+                      end,
+                      disabled = function() return borderOff() or qualityOff() end,
+                      disabledTooltip = "Quality Color" },
+                })
+            end
+            y = y - h
+        else
+            local texValues, texOrder = DefaultableBorderValues()
 
-        local row
-        row, h = W:DualRow(parent, y,
-            { type="dropdown", text="Border Style",
-              tooltip="Replaces the loot window's border. Default keeps the standard window border.",
-              disabled=lootOff, disabledTooltip="Loot Window",
-              values=texValues, order=texOrder,
-              getValue=function()
-                  return EllesmereUIDB and EllesmereUIDB[prefix.."BorderTexture"] or "default"
-              end,
-              setValue=function(v)
-                  if not EllesmereUIDB then EllesmereUIDB = {} end
-                  SetDefaultableBorderStyle(prefix, v)
-                  refresh()
-                  EllesmereUI:RefreshPage(true)
-              end },
-            BorderSizeSlider(prefix, "Border Size", lootOff, refresh, "Loot Window")
-        ); y = y - h
+            local row
+            row, h = W:DualRow(parent, y,
+                { type="dropdown", text="Border Style",
+                  tooltip="Replaces the loot window's border. Default keeps the standard window border.",
+                  disabled=lootOff, disabledTooltip="Loot Window",
+                  values=texValues, order=texOrder,
+                  getValue=function()
+                      return EllesmereUIDB and EllesmereUIDB[prefix.."BorderTexture"] or "default"
+                  end,
+                  setValue=function(v)
+                      if not EllesmereUIDB then EllesmereUIDB = {} end
+                      SetDefaultableBorderStyle(prefix, v)
+                      refresh()
+                      EllesmereUI:RefreshPage(true)
+                  end },
+                BorderSizeSlider(prefix, "Border Size", lootOff, refresh, "Loot Window")
+            ); y = y - h
 
-        -- Accent | Class | Custom | Quality swatches beside Border Size, as on the Tooltips page.
-        AttachBorderControls(row, prefix, lootOff, false, { apply = refresh,
-            quality = { key = prefix.."BorderQualityColor",
-                        tip = "Quality Color: the best item's, or this color for Poor and Common" } })
+            -- Accent | Class | Custom | Quality swatches beside Border Size, as on the Tooltips page.
+            AttachBorderControls(row, prefix, lootOff, false, { apply = refresh,
+                quality = { key = prefix.."BorderQualityColor",
+                            tip = "Quality Color: the best item's, or this color for Poor and Common" } })
 
-        -- Width | Height Offset, only for a textured style (art with built-in padding needs fitting).
-        local ocfgL, ocfgR = BorderOffsetCfgs(prefix, lootOff, refresh, "Loot Window")
-        if ocfgL then _, h = W:DualRow(parent, y, ocfgL, ocfgR); y = y - h end
+            -- Width | Height Offset, only for a textured style (art with built-in padding needs fitting).
+            local ocfgL, ocfgR = BorderOffsetCfgs(prefix, lootOff, refresh, "Loot Window")
+            if ocfgL then _, h = W:DualRow(parent, y, ocfgL, ocfgR); y = y - h end
+        end
 
         -- ICON BORDER: the item icons' quality border in a picked style and size (color stays the item quality).
         _, h = WSCardSection(parent, "ICON BORDER", y);  y = y - h
@@ -2758,78 +2810,36 @@ initFrame:SetScript("OnEvent", function(self)
     end
 
     -- Style vocabulary shared by the per-card dropdowns and the set-all row.
-    local WS_STYLE_VALUES = { eui = "EllesmereUI", modern = "Modern", off = "Blizz Default" }
-    local WS_STYLE_ORDER  = { "eui", "modern", "off" }
+    local WS_STYLE_VALUES = { eui = "EllesmereUI", off = "Blizz Default" }
+    local WS_STYLE_ORDER  = { "eui", "off" }
     -- The Character Sheet's own: its Blizz Default keeps Blizzard's sheet
     -- with the EllesmereUI stats, slot text and socket panel; Off leaves the
     -- sheet untouched.
-    local WS_CHARSHEET_VALUES = { eui = "EllesmereUI", modern = "Modern", blizzard = "Blizz Default", off = "Off" }
-    local WS_CHARSHEET_ORDER  = { "eui", "modern", "blizzard", "off" }
+    local WS_CHARSHEET_VALUES = { eui = "EllesmereUI", blizzard = "Blizz Default", off = "Off" }
+    local WS_CHARSHEET_ORDER  = { "eui", "blizzard", "off" }
 
-    -- Modern background color + opacity: ONE global setting for the Modern
-    -- style, resolved by the window-skin engine and applied live to every
-    -- window currently set to Modern.
-    local function WSModernGet()
-        if ns.WSkin and ns.WSkin.GetModernBG then
-            return ns.WSkin.GetModernBG()
-        end
-        return 0.067, 0.067, 0.067, 0.97
-    end
-    local function WSModernSet(r, g, b, a)
-        if not EllesmereUIDB then EllesmereUIDB = {} end
-        EllesmereUIDB.blizzWindowModernDefault = { r = r, g = g, b = b, a = a }
-        if EllesmereUI._WSkinRefreshStyles then EllesmereUI._WSkinRefreshStyles() end
-    end
-
-    -- Single Modern color swatch left of the set-all dropdown, greyed and
-    -- blocked while isOff() (that dropdown is not on Modern). The picker
-    -- carries the opacity slider; edits write the Modern preset directly, so
-    -- windows already on Modern recolor immediately (no Apply to All).
-    local function AttachModernSwatch(host, anchorTo, isOff)
-        local swatch, updateSwatch = EllesmereUI.BuildColorSwatch(host, host:GetFrameLevel() + 5,
-            function() return WSModernGet() end,
-            function(r, g, b, a) WSModernSet(r, g, b, a) end,
-            true, 20)
-        EllesmereUI.PanelPP.Point(swatch, "RIGHT", anchorTo, "LEFT", -8, 0)
-        swatch:HookScript("OnEnter", function(s)
-            EllesmereUI.ShowWidgetTooltip(s, "Background color for the Modern style.")
-        end)
-        swatch:HookScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-        local block = CreateFrame("Frame", nil, swatch)
-        block:SetAllPoints()
-        block:SetFrameLevel(swatch:GetFrameLevel() + 10)
-        block:EnableMouse(true)
-        block:SetScript("OnEnter", function()
-            EllesmereUI.ShowWidgetTooltip(swatch, EllesmereUI.DisabledTooltip("This option requires the Modern style."))
-        end)
-        block:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
-        local function Refresh()
-            updateSwatch()
-            local off = isOff()
-            swatch:SetAlpha(off and 0.3 or 1)
-            block:SetShown(off)
-        end
-        EllesmereUI.RegisterWidgetRefresh(Refresh)
-        Refresh()
-    end
-
-    -- Global look settings (Global Options section): central tables, nil =
-    -- defaults, resolved by the window-skin engine and applied live.
     local function WSLook(key)
         return EllesmereUIDB and EllesmereUIDB[key]
+    end
+    local function AdoptGlobalWindowBackground()
+        if EllesmereUIDB and EllesmereUIDB.blizzWindowLegacyBackgrounds then
+            EllesmereUIDB.blizzWindowLegacyBackgrounds = nil
+            ns.WSkin.RefreshStyles()
+        end
     end
     local function WSLookSet(key, field, v)
         if not EllesmereUIDB then EllesmereUIDB = {} end
         local t = EllesmereUIDB[key]
         if not t then t = {}; EllesmereUIDB[key] = t end
         t[field] = v
+        AdoptGlobalWindowBackground()
         if EllesmereUI._WSkinRefreshLooks then EllesmereUI._WSkinRefreshLooks() end
     end
 
     -- Inline accent|custom swatch pair on a DualRow region (the standard
     -- dual-swatch treatment): custom sits nearest the control, accent left of
     -- it; the active mode renders bright, the other dimmed.
-    local function AttachLookSwatches(rgn, row, key)
+    local function AttachLookSwatches(rgn, row, key, disableWithToggle)
         local PP = EllesmereUI.PanelPP
         local ctrl = rgn._control
 
@@ -2888,8 +2898,11 @@ initFrame:SetScript("OnEvent", function(self)
             updateCustom(); updateAccent()
             local c = WSLook(key)
             local useCustom = c and c.useCustom
-            customSwatch:SetAlpha(useCustom and 1 or 0.3)
-            accentSwatch:SetAlpha(useCustom and 0.3 or 1)
+            local off = disableWithToggle and c and c.enabled == false
+            customSwatch:SetAlpha(off and 0.15 or (useCustom and 1 or 0.3))
+            accentSwatch:SetAlpha(off and 0.15 or (useCustom and 0.3 or 1))
+            customSwatch:EnableMouse(not off)
+            accentSwatch:EnableMouse(not off)
         end
         EllesmereUI.RegisterWidgetRefresh(refreshPair)
         refreshPair()
@@ -3469,7 +3482,6 @@ initFrame:SetScript("OnEvent", function(self)
         local oldClass = (old == "off" and 0) or (old == "blizzard" and 1) or 2
         local newClass = (style == "off" and 0) or (style == "blizzard" and 1) or 2
         local crossed = win.reloadMsg ~= nil and oldClass ~= newClass
-        -- eui<->modern applies live (shell backdrops swap in place).
         if EllesmereUI._WSkinRefreshStyles then EllesmereUI._WSkinRefreshStyles() end
         if crossed and not suppressPopup then
             WSReloadPopup(win.reloadMsg)
@@ -3614,7 +3626,7 @@ initFrame:SetScript("OnEvent", function(self)
             if expanded then chev:SetVertexColor(EG.r, EG.g, EG.b) end
         end
 
-        -- Style dropdown: pick EllesmereUI / Modern / Blizz Default for this
+        -- Style dropdown: pick EllesmereUI / Blizz Default for this
         -- window without expanding the card (the card's own list, when it
         -- has one).
         local dd = EllesmereUI.BuildDropdownControl(hdr, 148, hdr:GetFrameLevel() + 2,
@@ -4008,9 +4020,6 @@ initFrame:SetScript("OnEvent", function(self)
 
         y = y - 28
 
-        -- Set-all row: pick a style, then push it to every window below. The
-        -- swatch + cog edit the GLOBAL Modern background (windows without a
-        -- per-window override follow it).
         local allDD = EllesmereUI.BuildDropdownControl(parent, 170, parent:GetFrameLevel() + 3,
             WS_STYLE_VALUES, WS_STYLE_ORDER,
             function() return _wsApplyAllStyle end,
@@ -4018,15 +4027,15 @@ initFrame:SetScript("OnEvent", function(self)
                 _wsApplyAllStyle = v
                 EllesmereUI:RefreshPage()
             end)
-        PP.Point(allDD, "TOPLEFT", parent, "TOP", -115, y)
+        PP.Point(allDD, "TOPLEFT", parent, "TOP", -145, y)
         allDD._ttText = "Style to apply to every window below."
-        AttachModernSwatch(parent, allDD, function() return _wsApplyAllStyle ~= "modern" end)
 
         local applyBtn = CreateFrame("Button", nil, parent)
         PP.Size(applyBtn, 110, 30)
         PP.Point(applyBtn, "LEFT", allDD, "RIGHT", 10, 0)
         applyBtn:SetFrameLevel(parent:GetFrameLevel() + 3)
         EllesmereUI.MakeStyledButton(applyBtn, "Apply to All", 12, EllesmereUI.WB_COLOURS, function()
+            AdoptGlobalWindowBackground()
             local crossed = false
             for _, win in ipairs(WINDOWS) do
                 local style = (_wsApplyAllStyle == "off" and win.blizzDefault) or _wsApplyAllStyle
@@ -4039,76 +4048,129 @@ initFrame:SetScript("OnEvent", function(self)
         end)
         y = y - 30 - 26
 
-        -- GLOBAL OPTIONS: look settings shared by every reskinned window.
-        _, h = W:SectionHeader(parent, "GLOBAL OPTIONS", y); y = y - h
+        _, h = W:SectionHeader(parent, "GLOBAL SETTINGS", y); y = y - h
+        local db = EllesmereUIDB
+        local function borderOff() return not db.blizzWinBorderTexture end
+        local function refreshBorder()
+            AdoptGlobalWindowBackground()
+            ns.WSkin.RefreshBorders()
+        end
+        local values = EllesmereUI.GetBorderTextureDropdown()
+        values.default = "EllesmereUI"
+        local borderRow
+        borderRow, h = W:DualRow(parent, y,
+            { type = "dropdown", text = "Border Style", values = values,
+              order = { "default", "solid", "glow", "shadow", "pixels", "pixels-textured" },
+              getValue = function() return db.blizzWinBorderTexture or "default" end,
+              setValue = function(v)
+                  SetDefaultableBorderStyle("blizzWin", v)
+                  if v ~= "default" then
+                      db.blizzWinBorderThickness = EllesmereUI.BORDER_LABEL_OF_STEP[EllesmereUI.GetBorderDefaultSize(nil, v)]
+                          or EllesmereUI.GetBorderTextureDefaultThickness(v) or "thin"
+                  end
+                  refreshBorder()
+                  EllesmereUI:RefreshPage(true)
+              end },
+            BorderSizeSlider("blizzWin", "Border Size", borderOff, refreshBorder, "Choose a custom Border Style"))
+        y = y - h
+        EllesmereUI.BuildInlineCog(borderRow._rightRegion, {
+            title = "Corner Radius", tip = "Corner Radius",
+            disabled = borderOff, disabledTooltip = "a custom Border Style",
+            rows = {
+                { type = "slider", label = "Frame Corner Radius", min = 0, max = EllesmereUI.ROUNDED_MAX_RADIUS, step = 1,
+                  disabled = function() return not EllesmereUI.RoundedStyleOK(db.blizzWinBorderTexture) end,
+                  disabledTooltip = "This option requires the Solid, Glow or Shadow border style.",
+                  get = function() return db.blizzWinCornerRadius or 0 end,
+                  set = function(v) db.blizzWinCornerRadius = v; refreshBorder() end },
+                { type = "slider", label = "Icon Corner Radius", min = 0, max = EllesmereUI.ROUNDED_MAX_RADIUS, step = 1,
+                  get = function() return db.blizzWinIconCornerRadius or 0 end,
+                  set = function(v)
+                      db.blizzWinIconCornerRadius = v
+                      AdoptGlobalWindowBackground()
+                      ns.WSkin.RefreshIconCorners()
+                  end },
+            },
+        })
+        AttachBorderControls(borderRow, "blizzWin", borderOff, false, { apply = refreshBorder, classAndCustom = true })
 
-        local gRow1
-        gRow1, h = W:DualRow(parent, y,
-            { type = "toggle", text = "Show Accent Bar",
-              tooltip = "Accent bar on the active tab of reskinned windows.",
+        local function backgroundColorOff() return db.blizzWindowBackground ~= "custom" end
+        local function setBackgroundColor(r, g, b, a)
+            db.blizzWindowModernDefault = { r = r, g = g, b = b, a = a }
+            db.blizzWindowLegacyBackgrounds = nil
+            ns.WSkin.RefreshStyles()
+        end
+        local backgroundRow
+        backgroundRow, h = W:DualRow(parent, y,
+            { type = "dropdown", text = "Background Style",
+              tooltip = "Choose a background for all reskinned windows. This replaces any backgrounds preserved from Modern.",
+              values = { eui = "EllesmereUI", custom = "Custom Color" }, order = { "eui", "custom" },
+              getValue = function() return db.blizzWindowBackground or "eui" end,
+              setValue = function(v)
+                  db.blizzWindowBackground = v
+                  db.blizzWindowLegacyBackgrounds = nil
+                  ns.WSkin.RefreshStyles()
+                  EllesmereUI:RefreshPage()
+              end },
+            { type = "slider", text = "Background Color", min = 0, max = 100, step = 1, trackWidth = 120,
+              tooltip = "Color and opacity of the custom window background.", tooltipOnControl = "Opacity Slider",
+              disabled = backgroundColorOff, disabledTooltip = "Custom Color",
               getValue = function()
-                  local c = WSLook("blizzWinAccentBar")
-                  return not (c and c.enabled == false)
+                  local _, _, _, a = ns.WSkin.GetModernBG()
+                  return math.floor(a * 100 + 0.5)
               end,
               setValue = function(v)
-                  WSLookSet("blizzWinAccentBar", "enabled", v and true or false)
-              end },
-            { type = "slider", text = "Bar Fill Opacity",
-              min = 10, max = 100, step = 1,
+                  local r, g, b = ns.WSkin.GetModernBG()
+                  setBackgroundColor(r, g, b, v / 100)
+              end })
+        if not EllesmereUI._prebuilding then
+            EllesmereUI.BuildInlineSwatches(backgroundRow._rightRegion, {
+                { hasAlpha = true, tooltip = "Background color and opacity.",
+                  getValue = ns.WSkin.GetModernBG,
+                  setValue = function(r, g, b, a)
+                      setBackgroundColor(r, g, b, a)
+                      EllesmereUI:RefreshPage()
+                  end,
+                  disabled = backgroundColorOff,
+                  disabledTooltip = "Custom Color" },
+            })
+        end
+        y = y - h
+
+        local fillRow
+        local textureValues, textureOrder = BarTextureMenu()
+        fillRow, h = W:DualRow(parent, y,
+            { type = "dropdown", text = "Bar Style", values = textureValues, order = textureOrder,
+              tooltip = "Texture of the fill in skinned progress bars.",
+              getValue = function()
+                  local fill = WSLook("blizzWinBarFill")
+                  return fill and fill.texture or "none"
+              end,
+              setValue = function(v) WSLookSet("blizzWinBarFill", "texture", v) end },
+            { type = "slider", text = "Bar Color", min = 10, max = 100, step = 1, trackWidth = 120,
+              tooltip = "Opacity of the colored fill in skinned progress bars, including collection counts and achievement progress.",
+              tooltipOnControl = "Opacity Slider",
               getValue = function()
                   local c = WSLook("blizzWinBarFill")
                   return math.floor(((c and c.alpha) or 0.95) * 100 + 0.5)
               end,
               setValue = function(v) WSLookSet("blizzWinBarFill", "alpha", v / 100) end })
-        if not EllesmereUI._prebuilding then
-        AttachLookSwatches(gRow1._leftRegion, gRow1, "blizzWinAccentBar")
-        AttachLookSwatches(gRow1._rightRegion, gRow1, "blizzWinBarFill")
-        end
+        if not EllesmereUI._prebuilding then AttachLookSwatches(fillRow._rightRegion, fillRow, "blizzWinBarFill") end
         y = y - h
 
-        _, h = W:DualRow(parent, y,
-            { type = "multiSwatch", text = "Link Color",
-              swatches = {
-                  { tooltip = "Accent Color",
-                    getValue = function()
-                        return EllesmereUI.ResolveActiveAccent()
-                    end,
-                    setValue = function() end,
-                    onClick = function()
-                        WSLookSet("blizzWinLinks", "useCustom", false)
-                        EllesmereUI:RefreshPage()
-                    end,
-                    refreshAlpha = function()
-                        local c = WSLook("blizzWinLinks")
-                        return (c and c.useCustom) and 0.3 or 1
-                    end },
-                  { tooltip = "Custom Color",
-                    getValue = function()
-                        local c = WSLook("blizzWinLinks")
-                        local col = c and c.color
-                        if col then return col.r or 1, col.g or 1, col.b or 1 end
-                        return 1, 1, 1
-                    end,
-                    setValue = function(r, g, b)
-                        WSLookSet("blizzWinLinks", "color", { r = r, g = g, b = b })
-                        WSLookSet("blizzWinLinks", "useCustom", true)
-                        EllesmereUI:RefreshPage()
-                    end,
-                    onClick = function(self)
-                        local c = WSLook("blizzWinLinks")
-                        if not (c and c.useCustom) then
-                            WSLookSet("blizzWinLinks", "useCustom", true)
-                            EllesmereUI:RefreshPage()
-                            return
-                        end
-                        if self._eabOrigClick then self._eabOrigClick(self) end
-                    end,
-                    refreshAlpha = function()
-                        local c = WSLook("blizzWinLinks")
-                        return (c and c.useCustom) and 1 or 0.3
-                    end },
-              } },
-            { type = "label", text = "" })
+        local accentRow
+        accentRow, h = W:DualRow(parent, y,
+            { type = "toggle", text = "Accent Bar",
+              tooltip = "Accent bar on the active tab of reskinned windows.",
+              getValue = ns.WSkin.AccentBarShown,
+              setValue = function(v) WSLookSet("blizzWinAccentBar", "enabled", v) end },
+            { type = "toggle", text = "Link Color",
+              tooltip = "Tint links in skinned text, including quest rewards and Adventure Guide descriptions. Also tints achievement comparison points.",
+              getValue = ns.WSkin.LinkColorEnabled,
+              setValue = function(v) WSLookSet("blizzWinLinks", "enabled", v) end })
+        if not EllesmereUI._prebuilding then
+            AttachLookSwatches(accentRow._leftRegion, accentRow, "blizzWinAccentBar")
+            AttachLookSwatches(accentRow._rightRegion, accentRow, "blizzWinLinks", true)
+        end
         y = y - h
 
         -- Breathing room between the global settings and the window cards.
@@ -4970,7 +5032,7 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.popupMenuButtonBackgroundColor=nil
                 EllesmereUIDB.popupMenuButtonTextColorMode=nil
                 EllesmereUIDB.popupMenuButtonTextColor=nil
-                for _,prefix in ipairs({"popupMenu","popupMenuButton","tooltip","lootWindow","lootIcon","timerBars"}) do
+                for _,prefix in ipairs({"popupMenu","popupMenuButton","tooltip","lootWindow","lootIcon","timerBars","blizzWin"}) do
                     for _,suffix in ipairs({"BorderTexture","BorderThickness","BorderThicknessPx","BorderColor","BorderColorMode","BorderOpacity","BorderOffsetX","BorderOffsetY","BorderShiftX","BorderShiftY","BorderBehind"}) do
                         EllesmereUIDB[prefix..suffix]=nil
                     end
@@ -4989,6 +5051,10 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.blizzWindowSkinStyles = nil
                 EllesmereUIDB.blizzWindowModernBG = nil
                 EllesmereUIDB.blizzWindowModernDefault = nil
+                EllesmereUIDB.blizzWindowBackground = nil
+                EllesmereUIDB.blizzWindowLegacyBackgrounds = nil
+                EllesmereUIDB.blizzWinCornerRadius = nil
+                EllesmereUIDB.blizzWinIconCornerRadius = nil
                 EllesmereUIDB.blizzWinAccentBar = nil
                 EllesmereUIDB.blizzWinBarFill = nil
                 EllesmereUIDB.blizzWinLinks = nil
@@ -5123,6 +5189,9 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.characterFramePos = nil
                 EllesmereUIDB.friendsFramePos = nil
             end
+            ns.WSkin.RefreshStyles()
+            ns.WSkin.RefreshBorders()
+            ns.WSkin.RefreshLooks()
             if EllesmereUI._applyTooltipCursorAnchor then EllesmereUI._applyTooltipCursorAnchor() end
             if EllesmereUI._applyTooltipFixedAnchor then EllesmereUI._applyTooltipFixedAnchor() end
             if EllesmereUI._applyTooltipHealthStrip then EllesmereUI._applyTooltipHealthStrip() end

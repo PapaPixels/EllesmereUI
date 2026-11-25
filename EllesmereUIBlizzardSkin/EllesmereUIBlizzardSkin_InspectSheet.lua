@@ -291,6 +291,7 @@ local function EUI_UpdateSlotStyle(slotName, slotID, textOverlayFrame, isRightCo
 
     if EllesmereUI and EllesmereUI.PanelPP then
         EllesmereUI.PanelPP.SetBorderColor(slot, borderR, borderG, borderB, 1)
+        EllesmereUI.RoundedBorderColor(slot, borderR, borderG, borderB, 1)
     end
     GetFFD(slot).border = true
 
@@ -1039,6 +1040,7 @@ local function SkinInspectSheet()
             -- Add rarity-colored border
             if EllesmereUI and EllesmereUI.PanelPP then
                 EllesmereUI.PanelPP.CreateBorder(slot, borderR, borderG, borderB, 1, 2, "OVERLAY", 7)
+                ns.WSkin.RegisterWindowIcon(slot.icon, slot)
             end
 
             local parent = slot:GetParent()

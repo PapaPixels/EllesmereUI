@@ -47,6 +47,9 @@ local function EnsureChrome(btn)
     bg:SetColorTexture(Theme.bgR, Theme.bgG, Theme.bgB, CELL_BG_A)
     bg:SetAllPoints(btn)
     d.bg = bg
+    WSkin.GetFFD(box).bg = bg
+    WSkin.GetFFD(box).windowIconCell = true
+    WSkin.RegisterWindowBorder(box, BorderPP().GetBorders(box))
     local hl = btn.GetHighlightTexture and btn:GetHighlightTexture()
     if hl and hl.SetColorTexture then
         hl:SetColorTexture(1, 1, 1, 0.1)
@@ -92,16 +95,17 @@ local function PaintBag(btn)
         if not (icon and icon.GetTexture and icon:GetTexture()) then icon = nt end
     end
     if icon and icon.SetTexCoord then
-        icon:SetTexCoord(ICON_CROP, 1 - ICON_CROP, ICON_CROP, 1 - ICON_CROP)
+        WSkin.SetIconCrop(icon, ICON_CROP)
     end
     -- The bevel NormalTexture fades, except while it is the keyring glyph.
     if nt and nt ~= icon then nt:SetAlpha(0) end
     if btn.IconBorder then btn.IconBorder:SetAlpha(0) end
     local regions = { btn:GetRegions() }
+    local round = icon and WSkin.FFD[icon] and WSkin.FFD[icon].auraRound
     for i = 1, #regions do
         local r = regions[i]
         local kind = r and r.GetObjectType and r:GetObjectType()
-        if kind == "MaskTexture" then
+        if kind == "MaskTexture" and not (round and r == round.mask) then
             -- pcall: a texture the mask is not on may reject the removal.
             if icon and icon.RemoveMaskTexture then pcall(icon.RemoveMaskTexture, icon, r) end
             if nt and nt ~= icon and nt.RemoveMaskTexture then pcall(nt.RemoveMaskTexture, nt, r) end
@@ -122,6 +126,7 @@ local function PaintBag(btn)
     else
         PP.SetBorderColor(d.box, Theme.brdR, Theme.brdG, Theme.brdB, Theme.brdA)
     end
+    WSkin.RegisterWindowIcon(icon, d.box, d.bg)
 end
 
 local function FadeFrameArt(frame)

@@ -14,7 +14,7 @@ ns.CombatQueue = EllesmereUI.NewCombatQueue(CreateFrame("Frame"))
 local FFD, GetFFD = EllesmereUI.NewFrameData()
 
 -------------------------------------------------------------------------------
---  Per-window skin style ("eui"|"modern"|"blizzard"|"off"). Enable keys are
+--  Per-window skin style ("eui"|"blizzard"|"off"). Enable keys are
 --  the on/off source of truth (key false = "off"; a STOCK_WINDOWS key is "off"
 --  until it is true); blizzWindowSkinStyles only
 --  records WHICH style an enabled window uses (nil = "eui"). "blizzard" is the
@@ -245,6 +245,44 @@ do
         styles.charsheet = "blizzard"
     end
 
+    -- Keep the old per-window backgrounds until the first global background edit.
+    -- Inspect follows the character sheet, including its saved whole-UI looks.
+    local function MigrateWindowBackgrounds(db)
+        local legacy
+        local styles = db.blizzWindowSkinStyles
+        if type(styles) == "table" then
+            for key, style in pairs(styles) do
+                if style == "modern" then
+                    legacy = legacy or {}
+                    legacy[key] = true
+                    styles[key] = "eui"
+                end
+            end
+        end
+        if type(db.windowSkinStyleSlots) == "table" then
+            for look, slot in pairs(db.windowSkinStyleSlots) do
+                if type(slot) == "table" and slot.charsheetStyle == "modern" then
+                    legacy = legacy or {}
+                    legacy.sheetLooks = legacy.sheetLooks or {}
+                    legacy.sheetLooks[look] = true
+                    slot.charsheetStyle = "eui"
+                end
+            end
+        end
+        if legacy then
+            -- Record each existing window. A window added in a later release
+            -- has no entry and inherits the global background.
+            for key in pairs(WINDOW_ENABLE_KEYS) do
+                legacy[key] = legacy[key] == true
+            end
+            if type(styles) == "table" then
+                for key in pairs(styles) do legacy[key] = legacy[key] == true end
+            end
+            db.blizzWindowBackground = "custom"
+            db.blizzWindowLegacyBackgrounds = legacy
+        end
+    end
+
     local seedFrame = CreateFrame("Frame")
     seedFrame:RegisterEvent("ADDON_LOADED")
     -- Registered here, first among this addon's frames, so the login pass
@@ -263,6 +301,7 @@ do
         for _, batch in ipairs(BATCHES) do SeedBatch(batch.marker, batch.keys) end
         AdoptLegacyWindowLook(EllesmereUIDB)
         AdoptCharSheetCardStyle(EllesmereUIDB)
+        MigrateWindowBackgrounds(EllesmereUIDB)
         EllesmereUI.ReconcileWindowSkinLook()
     end)
 end
@@ -278,18 +317,23 @@ function EllesmereUI.GetBlizzWindowStyle(winKey)
     if ek and not EnabledValue(winKey, EllesmereUIDB and EllesmereUIDB[ek]) then return "off" end
     local styles = EllesmereUIDB and EllesmereUIDB.blizzWindowSkinStyles
     local s = styles and styles[winKey]
-    if s == "modern" or s == "blizzard" then return s end
+    if s == "blizzard" then return s end
     return "eui"
 end
 
---- Style for third-party addon skins: majority vote across the user's own window
---- styles. Modern majority -> "modern"; else (EUI majority, tie, or nothing skinned,
---- incl. under the kill switch where every window reports "off") -> "eui". Never
---- returns "off": whether third-party skinning runs is decided by its own toggles in
---- the SkinAPI dispatcher (reload-bound there), so live refreshes only ever swap between the two themes.
+function EllesmereUI.BlizzWindowCustomBackground(winKey)
+    local db = EllesmereUIDB
+    if not db or db.blizzWindowBackground ~= "custom" then return false end
+    local legacy = db.blizzWindowLegacyBackgrounds
+    return not legacy or legacy[winKey] ~= false
+end
+
+-- Third-party skins follow Background. Migrated mixes keep the old majority vote.
 function EllesmereUI.GetThirdPartySkinStyle()
+    if not (EllesmereUIDB and EllesmereUIDB.blizzWindowLegacyBackgrounds) then
+        return EllesmereUI.BlizzWindowCustomBackground() and "modern" or "eui"
+    end
     local eui, modern = 0, 0
-    local styles = EllesmereUIDB and EllesmereUIDB.blizzWindowSkinStyles
     -- Under a stock look (windowSkinStyleSlots.active) a window still votes
     -- as it stands in the EllesmereUI look's slot, so switching the whole UI
     -- leaves the vote where it was.
@@ -305,10 +349,12 @@ function EllesmereUI.GetThirdPartySkinStyle()
             -- a window that is off.
             if s == "blizzard" then s = "off" end
             if s == "off" and not killed and euiSlot and EnabledValue(winKey, euiSlot[ek]) then
-                s = (styles and styles[winKey] == "modern") and "modern" or "eui"
+                s = "eui"
             end
-            if s == "modern" then modern = modern + 1
-            elseif s == "eui" then eui = eui + 1 end
+            if s == "eui" then
+                if EllesmereUI.BlizzWindowCustomBackground(winKey) then modern = modern + 1
+                else eui = eui + 1 end
+            end
         end
     end
     return (modern > eui) and "modern" or "eui"
@@ -407,6 +453,16 @@ function EllesmereUI.SwapWindowSkinStyle(to, dryRun, legacyStock)
     -- Classic WoW UI; on the EllesmereUI look and WoW Forever a Blizz Default
     -- goes back to the EllesmereUI skin and any other pick stays.
     local cs = saved and saved.charsheetStyle
+    local legacy = EllesmereUIDB.blizzWindowLegacyBackgrounds
+    if legacy then
+        legacy.sheetLooks = legacy.sheetLooks or {}
+        legacy.sheetLooks[from] = legacy.charsheet
+        if cs then
+            legacy.charsheet = legacy.sheetLooks[to] == true
+        elseif not LookSkinsWindows(to) or (styles and styles.charsheet == "blizzard") then
+            legacy.charsheet = false
+        end
+    end
     if cs == nil then
         if not LookSkinsWindows(to) then
             cs = "blizzard"

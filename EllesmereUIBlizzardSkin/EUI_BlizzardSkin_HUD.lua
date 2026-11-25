@@ -99,8 +99,9 @@ local GetFFD = I.GetFFD
     local function BarFill(bar)
         local W = WS()
         if W and W.ApplyBarFill then
-            W.ApplyBarFill(bar)
+            W.ApplyBarFill(bar, true)
         elseif bar.SetStatusBarColor then
+            bar:SetStatusBarTexture(FLAT)
             local EG = EllesmereUI.ELLESMERE_GREEN or { r = 0.047, g = 0.824, b = 0.616 }
             bar:SetStatusBarColor(EG.r * 0.8, EG.g * 0.8, EG.b * 0.8, 0.95)
         end
@@ -154,7 +155,7 @@ local GetFFD = I.GetFFD
         -- Fill installed FIRST, then re-read, so the "clear everything that is
         -- not the fill" sweep below can never clear the live fill whatever art
         -- Blizzard happened to have there.
-        bar:SetStatusBarTexture(FLAT)
+        BarFill(bar)
         local fill = bar.GetStatusBarTexture and bar:GetStatusBarTexture()
         StripBarArt(bar, fill)
         for i = 1, #keys do
@@ -182,7 +183,6 @@ local GetFFD = I.GetFFD
             -- the themed border is what made these read as thick chrome.
             ThinBorder(bar)
         end
-        BarFill(bar)
     end
 
     local PROGRESS_ART = {
@@ -528,7 +528,7 @@ local GetFFD = I.GetFFD
         -- Plate-hosted covers are the only ones the size floor applies to.
         c.euiPlate = isPlate and true or false
         AnchorCover(c, bar, c.euiPad)
-        c:SetStatusBarTexture(FLAT)
+        BarFill(c)
         -- OPAQUE trough, not the usual 0.85: this one has to hide Blizzard's
         -- bar and border underneath rather than merely sit behind our own fill.
         -- Spans the whole cover, so there is no dark margin anywhere.
@@ -542,7 +542,6 @@ local GetFFD = I.GetFFD
         label:SetPoint("CENTER", c, "CENTER", 0, 0)
         c.euiLabel = label
         HouseFont(label, true)
-        BarFill(c)
         -- Tiny black outline on EVERY bar, by maintainer call. The earlier "no border"
         -- call was about the THEMED accent border, which is heavy on a 15px
         -- bar; a 1px black edge is what actually defines it.

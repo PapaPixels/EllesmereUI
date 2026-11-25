@@ -297,6 +297,7 @@ local function ColorSlotBorder(slot)
     if not (PanelPP and PanelPP.SetBorderColor) then return end
     local r, g, b = SlotBorderColor(slot)
     PanelPP.SetBorderColor(slot, r, g, b, 1)
+    EllesmereUI.RoundedBorderColor(slot, r, g, b, 1)
 end
 
 --------------------------------------------------------------------------------
@@ -981,6 +982,7 @@ local function DressSlot(slot, slotName, Fade)
         local borders = PanelPP.GetBorders and PanelPP.GetBorders(slot)
         if borders then borders:SetFrameLevel(slot:GetFrameLevel()) end
         GetFFD(slot).border = true
+        ns.WSkin.RegisterWindowIcon(icon, slot, bg)
     end
 end
 

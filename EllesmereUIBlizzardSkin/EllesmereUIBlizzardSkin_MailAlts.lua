@@ -101,7 +101,7 @@ local SHELL_ART         = "Interface\\AddOns\\EllesmereUI\\media\\modern_blizz.p
 
 local ev = CreateFrame("Frame")
 local panel, title, emptyNote
-local bgArt, bgShade, bgFlat      -- the EllesmereUI look's backdrop layers
+local bgArt
 local rows = {}
 local dirty = true                -- the shown list needs a repaint
 local hooked = false
@@ -499,18 +499,6 @@ end
 -------------------------------------------------------------------------------
 --  The panel
 -------------------------------------------------------------------------------
-local function PaintBackdrop()
-    if blizzLook or not panel then return end
-    local modern = WSkin.GetStyle("mail") == "modern"
-    bgArt:SetAlpha(modern and 0 or 1)
-    bgShade:SetAlpha(modern and 0 or 1)
-    if modern then
-        bgFlat:SetColorTexture(WSkin.GetModernBG())
-    else
-        bgFlat:SetColorTexture(0, 0, 0, 0)
-    end
-end
-
 -- The tab strip: plain buttons, the shown tab bright and underlined.
 local TAB_LIST = { "alts", "guild", "friends" }
 
@@ -604,22 +592,21 @@ local function Build()
         bgArt = panel:CreateTexture(nil, "BACKGROUND", nil, -8)
         bgArt:SetTexture(SHELL_ART)
         bgArt:SetAllPoints()
-        bgShade = panel:CreateTexture(nil, "BACKGROUND", nil, -7)
+        local bgShade = panel:CreateTexture(nil, "BACKGROUND", nil, -7)
         bgShade:SetColorTexture(0, 0, 0, 0.62)
         bgShade:SetAllPoints()
-        bgFlat = panel:CreateTexture(nil, "BACKGROUND", nil, -6)
-        bgFlat:SetAllPoints()
+        WSkin.AdoptShell("mail", panel, bgArt, bgShade)
         local band = panel:CreateTexture(nil, "BACKGROUND", nil, -5)
         band:SetColorTexture(0, 0, 0, 0.5)
         band:SetPoint("TOPLEFT")
         band:SetPoint("TOPRIGHT")
         band:SetHeight(topH)
+        WSkin.GetFFD(panel).topBar = band
         WSkin.AddBorder(panel)
+        WSkin.RegisterWindowBorder(panel, (EllesmereUI.PanelPP or EllesmereUI.PP).GetBorders(panel))
         title = panel:CreateFontString(nil, "OVERLAY")
         WSkin.Font(title, 1, 1, 1, 12)
         title:SetPoint("CENTER", band, "CENTER", 0, 0)
-        PaintBackdrop()
-        WSkin.OnStylesChanged(PaintBackdrop)
     end
     title:SetText(EllesmereUI.L("Alts"))
     BuildTabs()

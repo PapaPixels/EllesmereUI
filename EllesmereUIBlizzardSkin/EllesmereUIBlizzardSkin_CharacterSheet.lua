@@ -501,12 +501,10 @@ local function PreSkinCharacterSheet()
     local bg, bgOverlay = ns.SheetBackdrop(frame)
     GetFFD(frame).bg = bg
     GetFFD(frame).bgOverlay = bgOverlay
-    -- Standard window-reskin border (AdventureMap_TopBorder atlas), as on every skinned window.
-    if ns.WSkin and ns.WSkin.AtlasBorder then ns.WSkin.AtlasBorder(frame) end
-    -- Lets the Modern flat backdrop live-swap in for the atlas when the user picks Modern here.
     if ns.WSkin and ns.WSkin.AdoptShell then
-        ns.WSkin.AdoptShell("charsheet", frame, bg, GetFFD(frame).bgOverlay)
+        ns.WSkin.AdoptShell("charsheet", frame, bg, bgOverlay)
     end
+    if ns.WSkin and ns.WSkin.AtlasBorder then ns.WSkin.AtlasBorder(frame) end
 
     -- PlayerModel: SetUnit("player") natively follows shapeshift forms and Dracthyr Visage. Backdrop + hover glow live on a sibling frame (the 3D model draws on top).
     -- Its level (and the text overlays' after it) comes from CharacterFrame's own, never a fixed
@@ -3103,6 +3101,7 @@ local function SkinCharacterSheet()
             EllesmereUI.PanelPP.CreateBorder(slot, borderR, borderG, borderB, 1, 2, "OVERLAY", 1)
             local bdrFrame = EllesmereUI.PanelPP.GetBorders(slot)
             if bdrFrame then bdrFrame:SetFrameLevel(slot:GetFrameLevel()) end
+            ns.WSkin.RegisterWindowIcon(slot.icon, slot, GetFFD(slot).slotBg)
         end
     end
 
@@ -3861,6 +3860,7 @@ local function SkinCharacterSheet()
                 end
                 if EllesmereUI and EllesmereUI.PanelPP then
                     EllesmereUI.PanelPP.SetBorderColor(slot, borderR, borderG, borderB, 1)
+                    EllesmereUI.RoundedBorderColor(slot, borderR, borderG, borderB, 1)
                 end
             end
         end

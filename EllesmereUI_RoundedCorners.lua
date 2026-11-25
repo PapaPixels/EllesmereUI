@@ -485,40 +485,46 @@ local function ClearAuraCorners(st, owner, icon, cd)
 end
 
 -- AuraKit calls this on a style pass, with public layout dimensions. Touch
--- only the icon, swipe and PP ring. The button can own other engine regions.
+-- only the icon, swipe and PP ring. Pass false for a borderless icon to fit
+-- the same full-texture mask directly to its artwork.
 function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h)
     local st = d.auraRound
-    local cont = radius and radius > 0 and EllesmereUI.PP.GetBorders(border)
+    local cont = radius and radius > 0 and border and EllesmereUI.PP.GetBorders(border)
+    local artworkOnly = border == false and icon and radius and radius > 0
+    local rect = border or icon
     -- The caller selects an active solid border from public style settings.
     -- Even its owned child frames can return secret visibility on a pooled aura.
     local edge = cont and cont._snapEdge
-    if not edge or edge <= 0 then
+    if artworkOnly then
+        edge = 0
+    elseif not edge or edge <= 0 then
         if st and st.on then ClearAuraCorners(st, owner, icon, cd) end
         return
     end
     local cap = max(0, (min(w, h) - 1) / 2)
-    if cont._scaleDecoupled then
+    if cont and cont._scaleDecoupled then
         local scale = border:GetEffectiveScale()
         if scale > 0 then edge = edge * cont:GetEffectiveScale() / scale end
     end
     edge = min(edge, cap)
     radius = min(MAX_RADIUS, max(1, floor(radius + 0.5)), max(1, floor(cap)))
     if not st then
-        st = { rect = border, corners = ALL_CORNERS, aura = true }
+        st = { rect = rect, corners = ALL_CORNERS, aura = true }
         if icon then
             st.mask = owner:CreateMaskTexture()
             st.mask:SetBlockingLoadsRequested(true)
         end
         d.auraRound = st
     end
-    local color = cont._bdColor
+    if st.on and st.rect ~= rect then ClearAuraCorners(st, owner, icon, cd) end
+    local color = cont and cont._bdColor
     if st.on and st.radius == radius and st.edge == edge and st.w == w and st.h == h and st.cont == cont then
         if color and (st.r ~= color[1] or st.g ~= color[2] or st.b ~= color[3] or st.a ~= color[4]) then
             st.solid.fill:SetVertexColor(unpack(color))
         end
     else
         local inner = max(1, floor(radius - edge + 0.5))
-        st.rect, st.auraInset = border, edge
+        st.rect, st.auraInset = rect, edge
         if icon then
             if st.on then icon:RemoveMaskTexture(st.mask) end
             if st.cover then st.cover:RemoveMaskTexture(st.mask) end
@@ -534,7 +540,7 @@ function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h)
                 shape = shape - 1
             end
             EllesmereUI.SetAuraIconMask(st.mask, shape)
-            Inset(st.mask, border, edge)
+            Inset(st.mask, rect, edge)
             if not AddMask(icon, st.mask) then
                 if st.on then ClearAuraCorners(st, owner, icon, cd) end
                 return
@@ -549,9 +555,9 @@ function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h)
             if cd then EllesmereUI.ApplyRoundedIconSwipe(cd, st) end
         end
         st.on = true
-        SolidOn(st, cont, radius, inner)
+        if cont then SolidOn(st, cont, radius, inner) else SolidOff(st) end
         if not st.poolCleanup and POOL.Gen and POOL.Gen(owner) then
-            st.poolCleanup = POOL.Attach(owner, st.solid.fill, nil, function()
+            st.poolCleanup = POOL.Attach(owner, cont and st.solid.fill or st.mask, nil, function()
                 if st.on then ClearAuraCorners(st, owner, icon, cd) end
             end)
         end

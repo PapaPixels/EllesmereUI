@@ -102,8 +102,7 @@ local function SkinCollectionsProgressBar(pb)
         end
     end
     if pb.SetStatusBarTexture then
-        pb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-        WSkin.ApplyBarFill(pb)
+        WSkin.ApplyBarFill(pb, true)
     end
     if not pd.bg then
         local trough = pb:CreateTexture(nil, "BACKGROUND", nil, -1)
@@ -692,8 +691,9 @@ local DARK_TEXT_RECOLOR = { ["000000"] = "ffffff", ["414141"] = "b0b8bc" }
 local function RecolorDarkText(fs)
     if not fs or not fs.GetText then return end
     local txt = fs:GetText()
-    if not txt or txt == "" or not txt:find("|cff", 1, true) then return end
-    local new, n = txt:gsub("|c[fF][fF](%x%x%x%x%x%x)", function(hex)
+    if issecretvalue(txt) or not txt or txt == "" or not txt:find("|cff", 1, true) then return end
+    local new, n = txt:gsub("|c[fF][fF](%x%x%x%x%x%x)()", function(hex, pos)
+        if txt:sub(pos, pos + 1) == "|H" then return end
         local repl = DARK_TEXT_RECOLOR[hex:lower()]
         if repl then return "|cff" .. repl end
     end)
@@ -704,11 +704,30 @@ end
 -- take per-element colors). Embedded hyperlink |c codes are rewritten to the
 -- Global Options link color; the |H payload stays untouched so clicking still
 -- works and re-runs are idempotent.
+local linkTexts
 local function RecolorLinks(fs)
+    if fs:IsForbidden() then return end
     local txt = fs.GetText and fs:GetText()
-    if not txt or txt == "" or not txt:find("|H", 1, true) then return end
-    local new, n = txt:gsub("|c%x%x%x%x%x%x%x%x|H", "|cff" .. WSkin.LinkColorHex() .. "|H")
-    if n > 0 and new ~= txt then fs:SetText(new) end
+    if issecretvalue(txt) then return end
+    if not txt or not txt:find("|H", 1, true) then
+        if linkTexts then linkTexts[fs] = nil end
+        return
+    end
+    if not linkTexts then
+        linkTexts = setmetatable({}, { __mode = "k" })
+        WSkin.OnLooksChanged(function()
+            for region in pairs(linkTexts) do RecolorLinks(region) end
+        end)
+    end
+    local state = linkTexts[fs]
+    if not state then state = {}; linkTexts[fs] = state end
+    if txt ~= state.painted then state.source = txt end
+    local painted = state.source
+    if WSkin.LinkColorEnabled() then
+        painted = painted:gsub("|c%x%x%x%x%x%x%x%x|H", "|cff" .. WSkin.LinkColorHex() .. "|H")
+    end
+    state.painted = painted
+    if painted ~= txt then fs:SetText(painted) end
 end
 
 local function WhitenTextIn(frame, depth)
@@ -720,8 +739,8 @@ local function WhitenTextIn(frame, depth)
             local r = regions[i]
             if r and r.IsObjectType and r:IsObjectType("FontString") and r.SetTextColor then
                 r:SetTextColor(1, 1, 1)
-                RecolorLinks(r)
                 RecolorDarkText(r)
+                RecolorLinks(r)
             end
         end
     end
@@ -1830,8 +1849,7 @@ local function SkinProfStatusBar(sb)
     end
     if sb.capRight and sb.capRight.SetAlpha then sb.capRight:SetAlpha(0) end
     if sb.SetStatusBarTexture then
-        sb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-        WSkin.ApplyBarFill(sb)
+        WSkin.ApplyBarFill(sb, true)
     end
     local d = GetFFD(sb)
     -- Blizzard's bar VISUAL (cap + middle + cap art) is wider than the StatusBar
@@ -2301,8 +2319,7 @@ local function Skin_Archaeology()
             end
         end
         if arb.SetStatusBarTexture then
-            arb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-            WSkin.ApplyBarFill(arb)
+            WSkin.ApplyBarFill(arb, true)
         end
         if not abd.bg then
             local trough = arb:CreateTexture(nil, "BACKGROUND", nil, -1)
@@ -3355,9 +3372,7 @@ local function Skin_Guild()
                 if t and t.SetAlpha then t:SetAlpha(0) end
             end
             if rep.Shadow and rep.Shadow.SetAlpha then rep.Shadow:SetAlpha(0) end
-            prog:SetTexture("Interface\\Buttons\\WHITE8X8")
-            local fr2, fg2, fb2, fa2 = WSkin.BarFillColor()
-            prog:SetVertexColor(fr2, fg2, fb2, fa2)
+            WSkin.ApplyBarFillTexture(prog)
             local trough = rep:CreateTexture(nil, "BACKGROUND", nil, -1)
             trough:SetColorTexture(0.12, 0.12, 0.12, 0.85)
             trough:SetPoint("TOPLEFT", rep, "TOPLEFT", 0, -(rt - pt2))
@@ -3952,8 +3967,7 @@ local function AchAccentBar(bar)
     WSkin.FadeRegions(bar, keep)
     WSkin.Register(bar, true)
     if bar.SetStatusBarTexture then
-        bar:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-        WSkin.ApplyBarFill(bar)
+        WSkin.ApplyBarFill(bar, true)
     end
     if not d.bg then
         local bg = bar:CreateTexture(nil, "BACKGROUND", nil, -1)
@@ -4229,6 +4243,7 @@ local function Skin_Achievements()
     -- Frame rect extends above the visible panel (floating points header), so
     -- the shell skips its border to avoid a line drawn across mid-air.
     WSkin.Shell("achievements", f, { noBorder = true })
+    WSkin.RegisterWindowBorder(f, nil, f, _G.AchievementFrameMetalBorderTopLeft, _G.AchievementFrameMetalBorderBottomRight)
     WSkin.CommonChrome(f, "AchievementFrame")
 
     -- Header banner: art gone, title+points in house font on a flat plate.
@@ -4514,11 +4529,16 @@ local function Skin_Achievements()
             GetFFD(compPts).moved = true
             compPts:ClearAllPoints()
             compPts:SetPoint("LEFT", compName, "RIGHT", 6, 0)
+            local r, g, b, a = compPts:GetTextColor()
             local function TintComparePoints()
-                local lr, lg, lb = WSkin.LinkColor()
-                compPts:SetTextColor(lr, lg, lb)
+                if WSkin.LinkColorEnabled() then
+                    compPts:SetTextColor(WSkin.LinkColor())
+                else
+                    compPts:SetTextColor(r, g, b, a)
+                end
             end
             TintComparePoints()
+            WSkin.OnLooksChanged(TintComparePoints)
             hooksecurefunc(compPts, "SetText", TintComparePoints)
             if compPts.SetFormattedText then
                 hooksecurefunc(compPts, "SetFormattedText", TintComparePoints)
@@ -7068,10 +7088,10 @@ local MICRO_INSET = 1
 local MICRO_GAP   = 2
 local MICRO_BG_A  = 0.45
 
-local function TrimMicroTex(tex, box)
+local function TrimMicroTex(tex, box, icon)
     if not tex or not tex.SetTexCoord then return end
     if tex.SetDrawLayer then tex:SetDrawLayer("ARTWORK") end
-    if MICRO_TRIM > 0 then tex:SetTexCoord(MICRO_TRIM, 1 - MICRO_TRIM, MICRO_TRIM, 1 - MICRO_TRIM) end
+    if MICRO_TRIM > 0 then WSkin.SetIconCrop(tex, MICRO_TRIM, icon) end
     tex:ClearAllPoints()
     tex:SetPoint("TOPLEFT", box, "TOPLEFT", MICRO_INSET, -MICRO_INSET)
     tex:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -MICRO_INSET, MICRO_INSET)
@@ -7092,6 +7112,9 @@ local function SkinMicroButtonInner(btn)
             bg:SetPoint("TOPLEFT", box, "TOPLEFT", 0, 0)
             bg:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, 0)
             WSkin.AddBorder(box)
+            GetFFD(box).bg = bg
+            GetFFD(box).windowIconCell = true
+            WSkin.RegisterWindowBorder(box, (EllesmereUI.PanelPP or EllesmereUI.PP).GetBorders(box))
             d.box, d.bg = box, bg
             local hl = btn.GetHighlightTexture and btn:GetHighlightTexture()
             if hl and hl.SetColorTexture then
@@ -7102,10 +7125,13 @@ local function SkinMicroButtonInner(btn)
                 hl:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", 0, 0)
             end
         end
-        if btn.GetNormalTexture then TrimMicroTex(btn:GetNormalTexture(), d.box) end
-        if btn.GetPushedTexture then TrimMicroTex(btn:GetPushedTexture(), d.box) end
-        if btn.GetDisabledTexture then TrimMicroTex(btn:GetDisabledTexture(), d.box) end
-        if btn.Portrait then TrimMicroTex(btn.Portrait, d.box) end
+        local normal = btn.GetNormalTexture and btn:GetNormalTexture()
+        local icon = normal or btn.Portrait
+        TrimMicroTex(normal, d.box, icon)
+        if btn.GetPushedTexture then TrimMicroTex(btn:GetPushedTexture(), d.box, icon) end
+        if btn.GetDisabledTexture then TrimMicroTex(btn:GetDisabledTexture(), d.box, icon) end
+        if btn.Portrait then TrimMicroTex(btn.Portrait, d.box, icon) end
+        WSkin.RegisterWindowIcon(icon, d.box, d.bg)
 end
 
 -- Named wrapper so the hot UpdateMicroButtons path allocates no closure per call (13 buttons x every fire = real GC churn otherwise).
@@ -10382,8 +10408,7 @@ local function Skin_AuctionHouse()
                 end
             end
             if pb.SetStatusBarTexture then
-                pb:SetStatusBarTexture("Interface\\Buttons\\WHITE8X8")
-                WSkin.ApplyBarFill(pb)
+                WSkin.ApplyBarFill(pb, true)
             end
             if not pd.bg then
                 local trough = pb:CreateTexture(nil, "BACKGROUND", nil, -1)
@@ -11809,26 +11834,33 @@ end
 ApplyLootBorder = function(f)
     local d = GetFFD(f)
     local db = EllesmereUIDB
-    if db and db.lootWindowBorderTexture then
-        if d.atlasBorderFrame then d.atlasBorderFrame:Hide() end
+    if db and (db.blizzWinBorderTexture or db.lootWindowBorderTexture) then
         local quality = db.lootWindowBorderColorMode == "quality"
         local override
         if quality then
             lootPaintedBest = BestLootQuality()
             override = LootQualityColor(lootPaintedBest)
         end
-        if EllesmereUI._applyBlizzardConfiguredBorder then
+        if db.blizzWinBorderTexture then
+            if d.lootBorderOn then EllesmereUI._hideBlizzardConfiguredBorder(f) end
+            d.lootBorderOn = nil
+            if d.atlasBorderFrame then
+                d.atlasBorderFrame:Show()
+                WSkin.SetWindowBorderTint(d.atlasBorderFrame, override)
+            end
+        else
+            if d.atlasBorderFrame then d.atlasBorderFrame:Hide() end
             EllesmereUI._applyBlizzardConfiguredBorder(f, "lootWindow", 1, override)
+            d.lootBorderOn = true
         end
         SyncLootQualityWatch(quality and f:IsShown())
-        d.lootBorderOn = true
-    elseif d.lootBorderOn then
-        if d.atlasBorderFrame then d.atlasBorderFrame:Show() end
-        if EllesmereUI._hideBlizzardConfiguredBorder then
+    else
+        if d.lootBorderOn then
+            if d.atlasBorderFrame then d.atlasBorderFrame:Show() end
             EllesmereUI._hideBlizzardConfiguredBorder(f)
+            d.lootBorderOn = nil
         end
         SyncLootQualityWatch(false)
-        d.lootBorderOn = nil
     end
 end
 
@@ -11864,12 +11896,12 @@ local function Skin_Loot()
             -- stays at 8% everywhere else. Re-asserted whenever Blizzard
             -- re-textures the icon: per-slot repopulation writes the texture
             -- directly without a ScrollBox Update, so a one-shot SetTexCoord can be overwritten. Post-hook only, args untouched.
-            icon:SetTexCoord(0.135, 0.865, 0.135, 0.865)
+            WSkin.SetIconCrop(icon, 0.135)
             local icd = GetFFD(icon)
             if not icd.coordHook and icon.SetTexture then
                 icd.coordHook = true
                 hooksecurefunc(icon, "SetTexture", function(self)
-                    self:SetTexCoord(0.135, 0.865, 0.135, 0.865)
+                    WSkin.SetIconCrop(self, 0.135)
                 end)
             end
 
@@ -11937,6 +11969,8 @@ local function Skin_Loot()
                 else
                     PPb.SetBorderColor(idd.qBorder, qr, qg, qb, 1)
                 end
+                local solid = not db or not db.lootIconBorder or (db.lootIconBorderTexture or "solid") == "solid"
+                WSkin.RegisterWindowIcon(icon, solid and idd.qBorder or false)
             end
         end
         for _, host in ipairs({ row, item }) do
@@ -12037,6 +12071,10 @@ local function Skin_Loot()
     WSkin.HookShow(f, WSkin.Debounce(function()
         if f:IsVisible() then Skin_Loot(); WSkin.Restrip() end
     end))
+end
+
+function WSkin.RefreshLootWindowBorder()
+    if lootSkinned and _G.LootFrame then ApplyLootBorder(_G.LootFrame) end
 end
 
 EllesmereUI._Loot_RefreshBorder = function()
@@ -12667,8 +12705,6 @@ end
 -------------------------------------------------------------------------------
 do
 local LP = {
-    FLAT = "Interface\\Buttons\\WHITE8X8",
-
     -- Plate / border art that lives one level down from a frame's own regions,
     -- so the shell's region fade never reaches it.
     ART_KEYS = {
@@ -12681,11 +12717,6 @@ local LP = {
         "IconQuestTexture",
     },
     INVITE_BTN_KEYS = { "AcceptButton", "DeclineButton", "AcknowledgeButton" },
-
-    -- Progress fills that are a TEXTURE rather than a StatusBar (the loot
-    -- history roll timer is one) cannot go through WSkin.ApplyBarFill, which
-    -- drives SetStatusBarColor. Same behaviour, one shared looks callback.
-    vertexFills = setmetatable({}, { __mode = "k" }),
 }
 
 -- Popup shell: full window treatment minus the title row. Style-aware backdrop
@@ -12730,19 +12761,6 @@ function LP.FontRegions(frame, skip)
     end
 end
 
-function LP.ApplyVertexFill(tex)
-    if not tex or not tex.SetVertexColor then return end
-    LP.vertexFills[tex] = true
-    local r, g, b, a = WSkin.BarFillColor()
-    tex:SetVertexColor(r, g, b, a)
-end
-WSkin.OnLooksChanged(function()
-    local r, g, b, a = WSkin.BarFillColor()
-    for tex in pairs(LP.vertexFills) do
-        if tex.SetVertexColor then tex:SetVertexColor(r, g, b, a) end
-    end
-end)
-
 -- Run fn(frame) as soon as a named Blizzard frame exists: immediately if it
 -- already does, otherwise on the ADDON_LOADED that creates it. Which dialogs
 -- are base UI vs load-on-demand has moved between expansions, so none is assumed present at login.
@@ -12763,7 +12781,7 @@ end
 function LP.Bar(bar)
     if not bar or bar:IsForbidden() or not bar.SetStatusBarTexture then return end
     local d = GetFFD(bar)
-    bar:SetStatusBarTexture(LP.FLAT)
+    WSkin.ApplyBarFill(bar, true)
     local fill = bar.GetStatusBarTexture and bar:GetStatusBarTexture()
     if fill and fill ~= d.fill then
         d.fill = fill
@@ -12777,7 +12795,6 @@ function LP.Bar(bar)
         bg:SetAllPoints(bar)
         d.bg = bg
     end
-    WSkin.ApplyBarFill(bar)
 end
 
 -------------------------------------------------------------------------------
@@ -13084,8 +13101,7 @@ function LP.ApplyHistory()
         end
         if fill then
             td.fill = fill
-            fill:SetTexture(LP.FLAT)
-            LP.ApplyVertexFill(fill)
+            WSkin.ApplyBarFillTexture(fill)
         end
     end
 
@@ -13613,8 +13629,6 @@ end
 -------------------------------------------------------------------------------
 do
 local HP = {
-    FLAT = "Interface\\Buttons\\WHITE8X8",
-
     -- Plate / frame art living one level down from a frame's own regions,
     -- where the shell's region fade never reaches it.
     ART_KEYS = {
@@ -13795,7 +13809,7 @@ end
 function HP.Bar(bar)
     if not bar or bar:IsForbidden() or not bar.SetStatusBarTexture then return end
     local d = GetFFD(bar)
-    bar:SetStatusBarTexture(HP.FLAT)
+    WSkin.ApplyBarFill(bar, true)
     local fill = bar.GetStatusBarTexture and bar:GetStatusBarTexture()
     if fill and fill ~= d.fill then
         d.fill = fill
@@ -13809,7 +13823,6 @@ function HP.Bar(bar)
         bg:SetAllPoints(bar)
         d.bg = bg
     end
-    WSkin.ApplyBarFill(bar)
 end
 
 -- Close button: skinned AND re-anchored to one house position.
@@ -15032,6 +15045,7 @@ function FC.Frame(owner, top, bottom, seam)
     edge:SetAllPoints(back)
     edge:SetFrameLevel(math.max(top:GetFrameLevel(), bottom:GetFrameLevel()) + 1)
     PP.CreateBorder(edge, 0, 0, 0, 1, 1, "OVERLAY", 7)
+    WSkin.RegisterWindowBorder(edge, PP.GetBorders(edge), back)
     if seam then
         local line = CreateFrame("Frame", nil, edge)
         line:SetAllPoints(bottom)

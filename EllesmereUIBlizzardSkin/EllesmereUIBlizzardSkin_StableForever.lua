@@ -50,10 +50,6 @@ end
 
 -- The XP bar is a masked atlas fill over a rounded track: drop both for a
 -- flat fill in the house bar color on a dark plate the fill's height.
-local function PaintXPFill(bar)
-    if bar and bar.Fill then bar.Fill:SetColorTexture(WSkin.BarFillColor()) end
-end
-
 local function SkinXPBar(bar)
     if not bar or bar:IsForbidden() or not (bar.Fill and bar.FillArea) then return end
     local d = GetFFD(bar)
@@ -68,9 +64,8 @@ local function SkinXPBar(bar)
         plate:SetPoint("TOP", bar.Fill, "TOP")
         plate:SetPoint("BOTTOM", bar.Fill, "BOTTOM")
         WSkin.BorderRegion(bar, plate)
-        WSkin.OnLooksChanged(function() PaintXPFill(bar) end)
     end
-    PaintXPFill(bar)
+    WSkin.ApplyBarFillTexture(bar.Fill)
     if bar.Text then WSkin.Font(bar.Text); WSkin.White(bar.Text) end
 end
 

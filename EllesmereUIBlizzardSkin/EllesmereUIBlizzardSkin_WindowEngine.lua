@@ -6,15 +6,8 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --  skinners every window pack builds from, and per-window boot orchestration
 --  for load-on-demand Blizzard addons.
 --
---  Style model (per window, chosen on the Blizzard Window Skins options page):
---    "eui"    -> the dungeons-and-raids shell: modern_blizz atlas backdrop
---                (cover-fit) + black overlay, full opacity.
---    "modern" -> identical skin, but the shell backdrop is a flat user-set
---                color + opacity (one global Modern color, applied live).
---    "off"    -> the window pack never runs (reload-gated).
---  EUI vs Modern differ ONLY in the shell backdrop; every other element
---  (buttons, tabs, borders, insets) is identical. eui<->modern applies LIVE
---  via RefreshStyles(); only off<->on needs a reload.
+--  The window picker controls whether the pack runs. The engine's "modern"
+--  theme token means a Custom Color background, including migrated windows.
 --
 --  Safety rules (hard requirements, see CLAUDE.md):
 --   - Per-frame state lives in a weak-keyed EXTERNAL table (FFD); we never
@@ -115,8 +108,10 @@ function WSkin.GetModernBG()
 end
 
 function WSkin.GetStyle(winKey)
-    if EUI and EUI.GetBlizzWindowStyle then return EUI.GetBlizzWindowStyle(winKey) end
-    return "eui"
+    local style = EUI.GetBlizzWindowStyle(winKey)
+    if style == "eui" and EUI.BlizzWindowCustomBackground(winKey)
+       and (type(winKey) ~= "string" or winKey:sub(1, 3) ~= "tp:") then return "modern" end
+    return style
 end
 
 -------------------------------------------------------------------------------
@@ -272,6 +267,90 @@ function WSkin.OnStylesChanged(fn)
     _styleCallbacks[#_styleCallbacks + 1] = fn
 end
 
+-- The border host follows its window's original bounds and visibility. Rounded
+-- corners mask only owned shell textures, never Blizzard's child frame tree.
+local windowBorders = {}
+local noRoots = {}
+local function PaintWindowBorder(host, d)
+    if host:IsForbidden() then return end
+    local db = EllesmereUIDB
+    local style = db and db.blizzWinBorderTexture
+    if not style and not d.windowCustomBorder then return end
+    local owner = host
+    if d.windowTopLeft and d.windowBottomRight then
+        if not d.windowBorderInset then
+            d.windowBorderInset = CreateFrame("Frame", nil, host)
+            d.windowBorderInset:SetPoint("TOPLEFT", d.windowTopLeft)
+            d.windowBorderInset:SetPoint("BOTTOMRIGHT", d.windowBottomRight)
+        end
+        owner = d.windowBorderInset
+    end
+    if style then
+        local border = EUI._applyBlizzardConfiguredBorder(owner, "blizzWin", 1, d.windowBorderTint)
+        if not border then return end
+        if d.windowDefaultEdge then d.windowDefaultEdge:Hide() end
+        local body = FFD[d.windowBorderBody] or d
+        if db.blizzWinBorderBehind and d.windowBorderBody then
+            border:SetFrameLevel(math.max(0, d.windowBorderBody:GetFrameLevel() - 1))
+        elseif body.atlasBorderFrame == host then
+            border:SetFrameLevel(host:GetFrameLevel())
+        end
+        d.windowCustomBorder = border
+        local radius = db.blizzWinCornerRadius or 0
+        if radius > 0 and not d.windowIconCell and EUI.RoundedStyleOK(style) then
+            EUI.RoundCorners(owner, radius, {
+                roots = noRoots, border = border, style = style,
+                textures = { body.bg, body.bgOverlay, body.modernBg, body.topBar, body.bottomBar },
+            })
+            d.windowRounded = true
+            return
+        end
+    else
+        EUI._hideBlizzardConfiguredBorder(owner)
+        if d.windowDefaultEdge then d.windowDefaultEdge:Show() end
+        d.windowCustomBorder = nil
+    end
+    if d.windowRounded then
+        EUI.RoundCorners(owner, 0)
+        d.windowRounded = nil
+    end
+end
+
+function WSkin.RegisterWindowBorder(host, defaultEdge, body, topLeft, bottomRight)
+    if windowBorders[host] then return end
+    local d = GetFFD(host)
+    d.windowDefaultEdge, d.windowBorderBody = defaultEdge, body
+    d.windowTopLeft, d.windowBottomRight = topLeft, bottomRight
+    windowBorders[host] = d
+    if not (EllesmereUIDB and EllesmereUIDB.blizzWinBorderTexture) then return end
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("WindowSkinBorders", WSkin.RefreshBorders)
+    else
+        PaintWindowBorder(host, d)
+    end
+end
+
+function WSkin.SetWindowBorderTint(host, color)
+    local d = windowBorders[host]
+    if not d or (not color and not d.windowBorderTint) then return end
+    d.windowBorderTint = color
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("WindowSkinBorders", WSkin.RefreshBorders)
+    else
+        PaintWindowBorder(host, d)
+    end
+end
+
+function WSkin.RefreshBorders()
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("WindowSkinBorders", WSkin.RefreshBorders)
+        return
+    end
+    for host, d in pairs(windowBorders) do PaintWindowBorder(host, d) end
+    if WSkin.RefreshLootWindowBorder then WSkin.RefreshLootWindowBorder() end
+    WSkin.RefreshIconCorners()
+end
+
 -- Re-resolve every registered shell (style switches + Modern color edits apply
 -- live; no reload). Exposed on EllesmereUI so the options page can call it.
 function WSkin.RefreshStyles()
@@ -380,8 +459,8 @@ function WSkin.Shell(winKey, frame, opts)
             d.bottomBar = bottomBar
         end
     end
-    if not (opts and opts.noBorder) then WSkin.AtlasBorder(frame) end
     WSkin.AdoptShell(winKey, frame)
+    if not (opts and opts.noBorder) then WSkin.AtlasBorder(frame) end
 end
 
 -- Window border: AdventureMap_TopBorder is a complete window-frame atlas
@@ -389,25 +468,26 @@ end
 -- over the backdrop, replacing the 1px line border on shells. Falls back to
 -- the 1px border if the atlas is ever missing.
 local BORDER_ATLAS = "AdventureMap_TopBorder"
-function WSkin.AtlasBorder(frame)
+function WSkin.AtlasBorder(frame, body)
     if not frame or frame:IsForbidden() then return end
     local d = GetFFD(frame)
     if d.atlasBorder then return end
     d.atlasBorder = true
     local info = C_Texture and C_Texture.GetAtlasInfo and C_Texture.GetAtlasInfo(BORDER_ATLAS)
-    if not info then
-        AddBorder(frame)
-        return
-    end
-
     local ov = CreateFrame("Frame", nil, frame)
     ov:SetAllPoints(frame)
     ov:SetFrameLevel(frame:GetFrameLevel() + 6)
     d.atlasBorderFrame = ov
-
-    local tex = ov:CreateTexture(nil, "OVERLAY", nil, 7)
-    tex:SetAtlas(BORDER_ATLAS)
-    tex:SetAllPoints(ov)
+    local edge
+    if info then
+        edge = ov:CreateTexture(nil, "OVERLAY", nil, 7)
+        edge:SetAtlas(BORDER_ATLAS)
+        edge:SetAllPoints(ov)
+    else
+        AddBorder(frame)
+        edge = (EUI.PanelPP or EUI.PP).GetBorders(frame)
+    end
+    WSkin.RegisterWindowBorder(ov, edge, body or frame)
 end
 
 -------------------------------------------------------------------------------
@@ -914,7 +994,7 @@ function WSkin.PagingIn(frame, depth)
 end
 
 -- 1px black frame around a texture region (squared icons).
-function WSkin.BorderRegion(parent, region)
+function WSkin.BorderRegion(parent, region, iconBorder)
     if not (parent and region) then return end
     local d = GetFFD(region)
     if d.bordered then return end
@@ -925,10 +1005,110 @@ function WSkin.BorderRegion(parent, region)
         return t
     end
     local t, b, l, r = line(), line(), line(), line()
+    if iconBorder then d.iconLines = {t, b, l, r} end
     t:SetPoint("TOPLEFT", region, "TOPLEFT", -1, 1);        t:SetPoint("TOPRIGHT", region, "TOPRIGHT", 1, 1);        t:SetHeight(1)
     b:SetPoint("BOTTOMLEFT", region, "BOTTOMLEFT", -1, -1); b:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", 1, -1); b:SetHeight(1)
     l:SetPoint("TOPLEFT", region, "TOPLEFT", -1, 1);        l:SetPoint("BOTTOMLEFT", region, "BOTTOMLEFT", -1, -1);  l:SetWidth(1)
     r:SetPoint("TOPRIGHT", region, "TOPRIGHT", 1, 1);       r:SetPoint("BOTTOMRIGHT", region, "BOTTOMRIGHT", 1, -1); r:SetWidth(1)
+end
+
+-- Keep the original icon crop and border at radius zero. Only a plain
+-- four-line edge needs a temporary PP ring for the aura renderer.
+local windowIcons = setmetatable({}, { __mode = "k" })
+local function PaintIconCorners(icon)
+    local d = windowIcons[icon]
+    local db = EllesmereUIDB
+    local radius = db and db.blizzWinBorderTexture and db.blizzWinIconCornerRadius or 0
+    local st = d.auraRound
+    if radius <= 0 and not (st and st.on) then return end
+    if icon:IsForbidden() then return end
+    local owner = icon:GetParent()
+    if not owner or owner:IsForbidden() then return end
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("WindowIconCorners", WSkin.RefreshIconCorners)
+        return
+    end
+    if radius > 0 then
+        local count = icon:GetNumMaskTextures()
+        if count == 0 and st and st.on then
+            EUI.RoundAuraCorners(owner, d, icon, nil, false, 0)
+        elseif count > 0 and not (st and st.on and count == 1 and icon:GetMaskTexture(1) == st.mask) then
+            radius = 0
+        end
+    end
+    local border = d.iconBorder
+    local cell = border and windowBorders[border]
+    if cell and cell.windowIconCell then
+        border = db and db.blizzWinBorderTexture == "solid" and cell.windowCustomBorder
+    end
+    if radius > 0 and not border and d.iconLines then
+        if not d.roundIconBorder then
+            local host = CreateFrame("Frame", nil, owner)
+            host:SetPoint("TOPLEFT", icon, "TOPLEFT", -1, 1)
+            host:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", 1, -1)
+            EUI.PP.CreateBorder(host, 0, 0, 0, 1, 1, "OVERLAY", 7)
+            host:Hide()
+            d.roundIconBorder = host
+        end
+        border = d.roundIconBorder
+    end
+    local w, h
+    if radius > 0 then
+        if border then
+            local ring = EUI.PP.GetBorders(border)
+            if not ring or not ring._snapEdge or ring._snapEdge <= 0 then border = nil end
+        end
+        local rect = border or icon
+        local ok
+        ok, w, h = pcall(rect.GetSize, rect)
+        if not ok or issecretvalue(w) or issecretvalue(h) or not w or not h or w <= 0 or h <= 0 then return end
+    end
+    st = EUI.RoundAuraCorners(owner, d, icon, nil, border or false, radius, w, h)
+    if st then
+        if border then EUI.TrackRoundedBorderColor(st, border) end
+        EUI.MaskRoundedIconLayer(st, d.iconBackground)
+        EUI.MaskRoundedIconLayer(st, d.iconHighlight)
+        if cell and cell.windowIconCell then
+            EUI.MaskRoundedIconLayer(st, owner.GetPushedTexture and owner:GetPushedTexture())
+            EUI.MaskRoundedIconLayer(st, owner.GetDisabledTexture and owner:GetDisabledTexture())
+            EUI.MaskRoundedIconLayer(st, owner.GetHighlightTexture and owner:GetHighlightTexture())
+            if owner.Portrait ~= icon then EUI.MaskRoundedIconLayer(st, owner.Portrait) end
+        end
+    end
+    if d.iconLines then
+        for _, line in ipairs(d.iconLines) do line:SetShown(not st) end
+    end
+    if d.roundIconBorder then d.roundIconBorder:SetShown(st ~= nil and border == d.roundIconBorder) end
+end
+
+function WSkin.RefreshIconCorners()
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("WindowIconCorners", WSkin.RefreshIconCorners)
+        return
+    end
+    for icon in pairs(windowIcons) do PaintIconCorners(icon) end
+end
+
+function WSkin.RegisterWindowIcon(icon, border, background)
+    if not (icon and icon.AddMaskTexture and icon.GetNumMaskTextures) then return end
+    local d = GetFFD(icon)
+    windowIcons[icon] = d
+    if border ~= nil then d.iconBorder = border end
+    if background then d.iconBackground = background end
+    PaintIconCorners(icon)
+end
+
+-- Some client textures reject a new crop while masked. Lift only our own
+-- mask long enough to update the coordinates of a recycled icon or layer.
+function WSkin.SetIconCrop(icon, inset, sourceIcon)
+    if pcall(icon.SetTexCoord, icon, inset, 1 - inset, inset, 1 - inset) then return true end
+    local d = windowIcons[sourceIcon or icon]
+    local st = d and d.auraRound
+    if not (st and st.on and icon:GetNumMaskTextures() == 1 and icon:GetMaskTexture(1) == st.mask) then return end
+    icon:RemoveMaskTexture(st.mask)
+    local ok = pcall(icon.SetTexCoord, icon, inset, 1 - inset, inset, 1 - inset)
+    icon:AddMaskTexture(st.mask)
+    return ok
 end
 
 -------------------------------------------------------------------------------
@@ -993,6 +1173,7 @@ local function PaintQuality(btn)
     -- 1px black edge, so a common drop should look like the rest of them
     -- rather than like a tile that lost its border.
     PP.SetBorderColor(host, r or 0, g or 0, b or 0, 1)
+    EUI.RoundedBorderColor(host, r or 0, g or 0, b or 0, 1)
 end
 
 -- Runs inside Blizzard's call stack, from bag and bank updates as well as ours.
@@ -1054,9 +1235,11 @@ function WSkin.QualityBorder(owner, icon, r, g, b)
         PP.CreateBorder(host, 0, 0, 0, 1, 1, "OVERLAY", 7)
         d.qBorder = host
     end
+    if windowIcons[icon] then WSkin.RegisterWindowIcon(icon, host) end
     if r then
         _qTiles[owner] = nil
         if PP.SetBorderColor then PP.SetBorderColor(host, r, g, b, 1) end
+        EUI.RoundedBorderColor(host, r, g, b, 1)
         return
     end
     _qTiles[owner] = host
@@ -1207,7 +1390,7 @@ function ItemCrop.OnTexture(btn)
     local icon = ItemCrop.tiles[btn]
     if not icon then return end
     local l, _, _, _, r = icon:GetTexCoord()
-    if l == 0 and r == 1 then pcall(icon.SetTexCoord, icon, 0.08, 0.92, 0.08, 0.92) end
+    if l == 0 and r == 1 then WSkin.SetIconCrop(icon, 0.08) end
 end
 
 function ItemCrop.Keep(btn, icon)
@@ -1246,21 +1429,26 @@ function WSkin.SquareIcon(icon, parent, quality)
     -- error, e.g. the special first-catch loot toast masks its icon). Leave
     -- masked icons fully native -- no crop, and no square border drawn
     -- around what the mask renders as a shape.
-    if icon.GetNumMaskTextures and icon:GetNumMaskTextures() > 0 then return end
+    if icon.GetNumMaskTextures and icon:GetNumMaskTextures() > 0 then
+        local d = windowIcons[icon]
+        local st = d and d.auraRound
+        if not (st and st.on and icon:GetNumMaskTextures() == 1 and icon:GetMaskTexture(1) == st.mask) then return end
+    end
     -- The count sees only AddMaskTexture masks; a legacy SetMask() mask is
     -- invisible to it and still rejects SetTexCoord (field: fishing loot
     -- toast on a build that already carried the count guard). The call
     -- itself is the only reliable probe -- on rejection the icon stays
     -- native, same as the counted case.
-    if not pcall(icon.SetTexCoord, icon, 0.08, 0.92, 0.08, 0.92) then return end
+    if not WSkin.SetIconCrop(icon, 0.08) then return end
     if btn then ItemCrop.Keep(btn, icon) end
     if parent then
         if quality then
             WSkin.QualityBorder(parent, icon)
         else
-            WSkin.BorderRegion(parent, icon)
+            WSkin.BorderRegion(parent, icon, true)
         end
     end
+    WSkin.RegisterWindowIcon(icon, quality and parent and GetFFD(parent).qBorder or nil)
     return true
 end
 
@@ -1295,11 +1483,13 @@ function WSkin.ItemButton(btn, opts)
         local plate = btn:CreateTexture(nil, "BACKGROUND", nil, -7)
         plate:SetColorTexture(Theme.insetR, Theme.insetG, Theme.insetB, 1)
         plate:SetAllPoints(icon)
+        GetFFD(icon).iconBackground = plate
         local ht = btn.GetHighlightTexture and btn:GetHighlightTexture()
         if ht then
             ht:SetColorTexture(1, 1, 1, 0.08)
             ht:ClearAllPoints()
             ht:SetAllPoints(icon)
+            GetFFD(icon).iconHighlight = ht
         end
     end
     WSkin.SquareIcon(icon, btn, true)
@@ -1603,6 +1793,11 @@ function WSkin.BarFillColor()
     return r * 0.8, g * 0.8, b * 0.8, a
 end
 
+function WSkin.LinkColorEnabled()
+    local c = EllesmereUIDB and EllesmereUIDB.blizzWinLinks
+    return not (c and c.enabled == false)
+end
+
 function WSkin.LinkColor()
     local c = EllesmereUIDB and EllesmereUIDB.blizzWinLinks
     if c and c.useCustom then
@@ -1623,14 +1818,62 @@ end
 -- outside the engine register here so option edits and accent changes
 -- recolor them without a reload.
 local _fillBars = setmetatable({}, { __mode = "k" })
+local _fillTextures = setmetatable({}, { __mode = "k" })
 local _extUnderlines = setmetatable({}, { __mode = "k" })
 local _lookCallbacks = {}
 
-function WSkin.ApplyBarFill(bar)
-    if not bar or not bar.SetStatusBarColor then return end
-    _fillBars[bar] = true
-    local r, g, b, a = WSkin.BarFillColor()
+local flatFill = "Interface\\Buttons\\WHITE8X8"
+local barTextures
+local function BarTexture()
+    local fill = EllesmereUIDB and EllesmereUIDB.blizzWinBarFill
+    local key = fill and fill.texture
+    if not key or key == "none" then return end
+    if not barTextures then barTextures = EUI.BuildBarTextureTables() end
+    return EUI.ResolveTexturePath(barTextures, key, nil)
+end
+
+-- Native and third-party bars can supply their own artwork. Keep that
+-- region intact so clearing the texture choice restores even an atlas.
+local function PaintStatusFill(bar, flat, path, r, g, b, a)
+    if flat then
+        bar:SetStatusBarTexture(path or flatFill)
+    elseif bar.SetStatusBarTexture and bar.GetStatusBarTexture then
+        local d = FFD[bar]
+        local current = (path or (d and d.windowFillOverride)) and bar:GetStatusBarTexture()
+        if path and current then
+            d = d or GetFFD(bar)
+            if not d.windowFillOverride then
+                d.windowFillOverride = bar:CreateTexture(nil, "ARTWORK")
+            end
+            d.windowFillOverride:SetTexture(path)
+            if current ~= d.windowFillOverride then
+                d.windowOriginalFill = current
+                bar:SetStatusBarTexture(d.windowFillOverride)
+                d.windowFillOverride:Show()
+            end
+        elseif current and d and current == d.windowFillOverride then
+            bar:SetStatusBarTexture(d.windowOriginalFill)
+            d.windowFillOverride:Hide()
+            d.windowOriginalFill = nil
+        end
+    end
     bar:SetStatusBarColor(r, g, b, a)
+end
+
+function WSkin.ApplyBarFill(bar, flat)
+    if not bar or not bar.SetStatusBarColor then return end
+    _fillBars[bar] = flat or false
+    PaintStatusFill(bar, flat, BarTexture(), WSkin.BarFillColor())
+end
+
+local function PaintFillTexture(tex, path, r, g, b, a)
+    tex:SetTexture(path or flatFill)
+    tex:SetVertexColor(r, g, b, a)
+end
+
+function WSkin.ApplyBarFillTexture(tex)
+    _fillTextures[tex] = true
+    PaintFillTexture(tex, BarTexture(), WSkin.BarFillColor())
 end
 
 function WSkin.RegisterAccentUnderline(tex)
@@ -1652,10 +1895,12 @@ function WSkin.RefreshLooks()
         tex:SetColorTexture(ur, ug, ub, 1)
     end
     local br, bgr, bb, ba = WSkin.BarFillColor()
-    for bar in pairs(_fillBars) do
-        if bar.SetStatusBarColor and not bar:IsForbidden() then
-            bar:SetStatusBarColor(br, bgr, bb, ba)
-        end
+    local path = BarTexture()
+    for bar, flat in pairs(_fillBars) do
+        if not bar:IsForbidden() then PaintStatusFill(bar, flat, path, br, bgr, bb, ba) end
+    end
+    for tex in pairs(_fillTextures) do
+        if not tex:IsForbidden() then PaintFillTexture(tex, path, br, bgr, bb, ba) end
     end
     for _, fn in ipairs(_lookCallbacks) do pcall(fn) end
 end

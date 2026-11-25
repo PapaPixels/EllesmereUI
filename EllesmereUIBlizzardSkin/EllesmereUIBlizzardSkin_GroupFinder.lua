@@ -156,17 +156,13 @@ local function SkinAtlasPanel(frame)
         frame:HookScript("OnSizeChanged", UpdateBgTexCoords)
         UpdateBgTexCoords()
     end
-    -- Window border: the shared atlas frame border every other reskinned
-    -- window uses (1px line fallback if the engine is unavailable).
+    if ns.WSkin and ns.WSkin.AdoptShell then
+        ns.WSkin.AdoptShell("lfg", frame, d.bg, d.bgOverlay)
+    end
     if ns.WSkin and ns.WSkin.AtlasBorder then
         ns.WSkin.AtlasBorder(frame)
     else
         AddBorder(frame)
-    end
-    -- Register with the window-style system so the Modern flat backdrop can
-    -- live-swap in for the atlas when the user picks Modern for this window.
-    if ns.WSkin and ns.WSkin.AdoptShell then
-        ns.WSkin.AdoptShell("lfg", frame, d.bg, d.bgOverlay)
     end
 end
 

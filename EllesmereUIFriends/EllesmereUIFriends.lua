@@ -1297,6 +1297,7 @@ local function PaintChrome()
     if shell and fd.atlasFrame == nil then
         local host = PP.GetBorders(frame)
         if host then
+            ws.GetFFD(host).bg = bg
             ws.AtlasBorder(host)
             fd.atlasFrame = ws.GetFFD(host).atlasBorderFrame or false
         end

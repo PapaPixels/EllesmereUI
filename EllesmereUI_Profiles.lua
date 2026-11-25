@@ -2237,7 +2237,7 @@ do
         "accentReskinElements",
     })
     -- Shared border-editor key sets (tooltip / popup menu / popup menu button)
-    for _, prefix in ipairs({ "tooltip", "popupMenu", "popupMenuButton", "lootWindow", "lootIcon", "timerBars" }) do
+    for _, prefix in ipairs({ "tooltip", "popupMenu", "popupMenuButton", "lootWindow", "lootIcon", "timerBars", "blizzWin" }) do
         for _, suffix in ipairs({
             "BorderTexture", "BorderThickness", "BorderThicknessPx", "BorderColor",
             "BorderColorMode", "BorderOpacity", "BorderOffsetX",
@@ -2267,7 +2267,8 @@ do
         "reskinTrade", "reskinFlagCarriers",
         -- The per-look window slots ride with the enables they describe.
         "windowSkinStyleSlots",
-        "blizzWindowSkinStyles", "blizzWindowModernDefault",
+        "blizzWindowSkinStyles", "blizzWindowModernDefault", "blizzWindowBackground",
+        "blizzWindowLegacyBackgrounds", "blizzWinCornerRadius", "blizzWinIconCornerRadius",
         "blizzWinAccentBar", "blizzWinBarFill", "blizzWinLinks",
         "thirdPartySkinsOff", "thirdPartySkinAddons",
     })

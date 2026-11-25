@@ -99,6 +99,7 @@ local FFD, GetFFD = I.FFD, I.GetFFD
             tex, db[prefix .. "BorderOffsetX"],
             db[prefix .. "BorderOffsetY"], db[prefix .. "BorderShiftX"], db[prefix .. "BorderShiftY"],
             "blizzardSkin", key, nil, px)
+        return data.configBorder
     end
     EllesmereUI._applyBlizzardConfiguredBorder = _applyConfiguredBorder
 
