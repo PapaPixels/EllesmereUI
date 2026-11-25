@@ -4891,6 +4891,19 @@ EllesmereUI.RegisterMigration({
 })
 end
 
+if EllesmereUI.IS_FOREVER then
+    EllesmereUI.RegisterMigration({
+        id = "forever_character_sheet_icon_zoom_v1",
+        scope = "global",
+        description = "Use the new Forever character sheet crop for the old default zoom.",
+        body = function(ctx)
+            if ctx.db.charSheetIconZoom == 0.07 then
+                ctx.db.charSheetIconZoom = nil
+            end
+        end,
+    })
+end
+
 -- WoW Forever CDM spell store repairs for imported and switched profiles.
 if EllesmereUI.IS_FOREVER == true then
     local GHOST_CD = "__ghost_cd"

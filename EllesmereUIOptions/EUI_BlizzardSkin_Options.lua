@@ -118,6 +118,26 @@ initFrame:SetScript("OnEvent", function(self)
         db[prefix.."BorderOffsetY"] = nil
         if db[prefix.."BorderThicknessPx"] then db[prefix.."BorderThicknessPx"] = false end
     end
+    local WINDOW_BORDER_DEFAULT_PX = { solid = 1, glow = 12, shadow = 12 }
+    local function SetWindowBorderStyle(style)
+        local db = EllesmereUIDB
+        local previous = db.blizzWinBorderTexture
+        if style == (previous or "default") then return end
+        local sizes = db.blizzWinBorderSizes or {}
+        db.blizzWinBorderSizes = sizes
+        if previous then
+            local step = BorderStep("blizzWin")
+            sizes[previous] = EllesmereUI.BorderPx(db.blizzWinBorderThicknessPx, step, previous)
+                or EllesmereUI.BorderLegacyPx(step, previous)
+        end
+        SetDefaultableBorderStyle("blizzWin", style)
+        local px = sizes[style] or (EllesmereUI._pixelArtBorders[style] and 16) or WINDOW_BORDER_DEFAULT_PX[style]
+        if px then
+            local step = px > 0 and EllesmereUI.BorderPxStep(px, style) or 0
+            db.blizzWinBorderThickness = EllesmereUI.BORDER_LABEL_OF_STEP[step]
+            db.blizzWinBorderThicknessPx = px > 0 and EllesmereUI.BorderPxString(px, step, style) or false
+        end
+    end
     -- A border row's inline controls: the Accent | Class | Custom color mode swatches left of
     -- its Border Size, and the Show Behind cog (allowBehind) left of its style. A cog built on
     -- the Border Size half before this call keeps its place beside the control: the swatches
@@ -1530,9 +1550,13 @@ initFrame:SetScript("OnEvent", function(self)
 
         -- Blizzard's own slot icons under Blizz Default (the inspect sheet
         -- keeps its stored zoom).
-        local iconZoomCfg = csGate({ type="slider", text="Icon Zoom", min=0, max=0.20, step=0.01,
-              tooltip="Crops the border of the equipment-slot item icons on the character and inspect sheets. 0 shows the full icon. Only affects the themed character sheet.",
-              getValue=function() return (EllesmereUIDB and EllesmereUIDB.charSheetIconZoom) or 0.07 end,
+        local iconZoomDefault = ns.ForeverIconZoomDefault or 0.07
+        local function GetIconZoom()
+            return (EllesmereUIDB and EllesmereUIDB.charSheetIconZoom) or iconZoomDefault
+        end
+        local iconZoomCfg = csGate({ type="slider", text="Icon Zoom", min=math.min(iconZoomDefault, GetIconZoom()), max=0.20, step=0.01,
+              tooltip="Crops the border of the equipment-slot item icons on the themed character and inspect sheets.",
+              getValue=GetIconZoom,
               setValue=function(v)
                   if not EllesmereUIDB then EllesmereUIDB = {} end
                   EllesmereUIDB.charSheetIconZoom = v
@@ -4051,6 +4075,8 @@ initFrame:SetScript("OnEvent", function(self)
         _, h = W:SectionHeader(parent, "GLOBAL SETTINGS", y); y = y - h
         local db = EllesmereUIDB
         local function borderOff() return not db.blizzWinBorderTexture end
+        local function radiusOff() return not EllesmereUI.RoundedStyleOK(db.blizzWinBorderTexture) end
+        local radiusTooltip = "This option requires the Solid, Glow or Shadow border style."
         local function refreshBorder()
             AdoptGlobalWindowBackground()
             ns.WSkin.RefreshBorders()
@@ -4063,11 +4089,7 @@ initFrame:SetScript("OnEvent", function(self)
               order = { "default", "solid", "glow", "shadow", "pixels", "pixels-textured" },
               getValue = function() return db.blizzWinBorderTexture or "default" end,
               setValue = function(v)
-                  SetDefaultableBorderStyle("blizzWin", v)
-                  if v ~= "default" then
-                      db.blizzWinBorderThickness = EllesmereUI.BORDER_LABEL_OF_STEP[EllesmereUI.GetBorderDefaultSize(nil, v)]
-                          or EllesmereUI.GetBorderTextureDefaultThickness(v) or "thin"
-                  end
+                  SetWindowBorderStyle(v)
                   refreshBorder()
                   EllesmereUI:RefreshPage(true)
               end },
@@ -4078,11 +4100,15 @@ initFrame:SetScript("OnEvent", function(self)
             disabled = borderOff, disabledTooltip = "a custom Border Style",
             rows = {
                 { type = "slider", label = "Frame Corner Radius", min = 0, max = EllesmereUI.ROUNDED_MAX_RADIUS, step = 1,
-                  disabled = function() return not EllesmereUI.RoundedStyleOK(db.blizzWinBorderTexture) end,
-                  disabledTooltip = "This option requires the Solid, Glow or Shadow border style.",
+                  disabled = radiusOff, disabledTooltip = radiusTooltip,
                   get = function() return db.blizzWinCornerRadius or 0 end,
-                  set = function(v) db.blizzWinCornerRadius = v; refreshBorder() end },
+                  set = function(v)
+                      db.blizzWinCornerRadius = v
+                      AdoptGlobalWindowBackground()
+                      ns.WSkin.RefreshFrameCorners()
+                  end },
                 { type = "slider", label = "Icon Corner Radius", min = 0, max = EllesmereUI.ROUNDED_MAX_RADIUS, step = 1,
+                  disabled = radiusOff, disabledTooltip = radiusTooltip,
                   get = function() return db.blizzWinIconCornerRadius or 0 end,
                   set = function(v)
                       db.blizzWinIconCornerRadius = v
@@ -5055,6 +5081,7 @@ initFrame:SetScript("OnEvent", function(self)
                 EllesmereUIDB.blizzWindowLegacyBackgrounds = nil
                 EllesmereUIDB.blizzWinCornerRadius = nil
                 EllesmereUIDB.blizzWinIconCornerRadius = nil
+                EllesmereUIDB.blizzWinBorderSizes = nil
                 EllesmereUIDB.blizzWinAccentBar = nil
                 EllesmereUIDB.blizzWinBarFill = nil
                 EllesmereUIDB.blizzWinLinks = nil

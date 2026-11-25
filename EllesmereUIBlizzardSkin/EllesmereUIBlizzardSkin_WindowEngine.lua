@@ -271,11 +271,17 @@ end
 -- corners mask only owned shell textures, never Blizzard's child frame tree.
 local windowBorders = {}
 local noRoots = {}
+function WSkin.IsModeTabBorderStyle(style)
+    return style ~= nil and (EUI._pixelArtBorders[style] or EUI.RoundedStyleOK(style))
+end
+
 local function PaintWindowBorder(host, d)
     if host:IsForbidden() then return end
     local db = EllesmereUIDB
+    local dock = d.windowDock
     local style = db and db.blizzWinBorderTexture
-    if not style and not d.windowCustomBorder then return end
+    if d.windowModeTab and not WSkin.IsModeTabBorderStyle(style) then style = nil end
+    if not style and not d.windowCustomBorder and not d.windowDividers then return end
     local owner = host
     if d.windowTopLeft and d.windowBottomRight then
         if not d.windowBorderInset then
@@ -286,34 +292,98 @@ local function PaintWindowBorder(host, d)
         owner = d.windowBorderInset
     end
     if style then
-        local border = EUI._applyBlizzardConfiguredBorder(owner, "blizzWin", 1, d.windowBorderTint)
+        local pixelArt = EUI._pixelArtBorders[style]
+        local opacity = (d.windowItemQuality or (d.windowOpaqueBorder and WSkin.IsModeTabBorderStyle(style))) and 1 or nil
+        local pixelSampling = pixelArt and (d.windowModeTab or d.windowLeftPaneBg ~= nil)
+        local border, size, key, color, px, texture = EUI._applyBlizzardConfiguredBorder(owner, "blizzWin", 1,
+            d.windowBorderTint, opacity, d.windowModeTab and pixelArt, pixelSampling)
         if not border then return end
         if d.windowDefaultEdge then d.windowDefaultEdge:Hide() end
         local body = FFD[d.windowBorderBody] or d
         if db.blizzWinBorderBehind and d.windowBorderBody then
-            border:SetFrameLevel(math.max(0, d.windowBorderBody:GetFrameLevel() - 1))
+            local level = math.max(0, d.windowBorderBody:GetFrameLevel() - 1)
+            local backdrop = d.windowLeftPaneBg
+            if backdrop then level = math.max(level, backdrop:GetParent():GetFrameLevel() + 1) end
+            border:SetFrameLevel(level)
         elseif body.atlasBorderFrame == host then
             border:SetFrameLevel(host:GetFrameLevel())
         end
         d.windowCustomBorder = border
+        if d.windowModeTab then
+            EUI.SetBorderStyleColor(border, color.r, color.g, color.b, opacity)
+        end
+        if d.windowDividers then d.windowDividers(border, texture, size, key, color, px, dock) end
         local radius = db.blizzWinCornerRadius or 0
         if radius > 0 and not d.windowIconCell and EUI.RoundedStyleOK(style) then
-            EUI.RoundCorners(owner, radius, {
-                roots = noRoots, border = border, style = style,
-                textures = { body.bg, body.bgOverlay, body.modernBg, body.topBar, body.bottomBar },
+            local dockBody = dock and FFD[dock]
+            local maskOwner = dock and d.windowBorderBody or owner
+            if d.windowRoundedOwner and d.windowRoundedOwner ~= maskOwner then
+                EUI.RoundCorners(d.windowRoundedOwner, 0)
+            end
+            EUI.RoundCorners(maskOwner, radius, {
+                rect = owner, roots = noRoots, border = border, style = style,
+                textures = { body.bg, body.bgOverlay, body.modernBg, body.topBar,
+                    dockBody and dockBody.modernBg or body.bottomBar, d.windowLeftPaneBg, d.windowRightPaneBg,
+                    dockBody and dockBody.bg, dockBody and dockBody.bgOverlay },
             })
-            d.windowRounded = true
+            d.windowRoundedOwner = maskOwner
             return
         end
     else
         EUI._hideBlizzardConfiguredBorder(owner)
         if d.windowDefaultEdge then d.windowDefaultEdge:Show() end
         d.windowCustomBorder = nil
+        if d.windowDividers then d.windowDividers(host, nil, nil, nil, nil, nil, dock) end
     end
-    if d.windowRounded then
-        EUI.RoundCorners(owner, 0)
-        d.windowRounded = nil
+    if d.windowRoundedOwner then
+        EUI.RoundCorners(d.windowRoundedOwner, 0)
+        d.windowRoundedOwner = nil
     end
+end
+
+function WSkin.SetWindowBorderDetails(frame, leftBg, rightBg, paintDividers, opaque)
+    local host = GetFFD(frame).atlasBorderFrame
+    local d = host and windowBorders[host]
+    if not d then return end
+    d.windowLeftPaneBg, d.windowRightPaneBg, d.windowDividers = leftBg, rightBg, paintDividers
+    d.windowOpaqueBorder = opaque
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("WindowSkinBorders", WSkin.RefreshBorders)
+    else
+        PaintWindowBorder(host, d)
+    end
+end
+
+-- The client keeps both panels independently sized; only the skin spans them.
+function WSkin.SetWindowBorderDock(frame, dock)
+    local host = GetFFD(frame).atlasBorderFrame
+    local d = host and windowBorders[host]
+    if not d then return end
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("CharacterSheetBorderDock", function()
+            WSkin.SetWindowBorderDock(frame, dock and dock:IsVisible() and dock or nil)
+        end)
+        return
+    end
+    if d.windowDock == dock then return end
+    d.windowDock = dock
+    host:ClearAllPoints()
+    if dock then
+        d.windowUndockedLevel = d.windowUndockedLevel or host:GetFrameLevel()
+        host:SetPoint("TOPLEFT", frame)
+        host:SetPoint("BOTTOMRIGHT", dock)
+        host:SetFrameLevel(math.max(d.windowUndockedLevel, dock:GetFrameLevel() + 1))
+    else
+        host:SetAllPoints(frame)
+        host:SetFrameLevel(d.windowUndockedLevel)
+        d.windowUndockedLevel = nil
+    end
+    PaintWindowBorder(host, d)
+end
+
+function WSkin.IsEmbeddedDropdownMenu(menu)
+    local d = FFD[menu]
+    return d and d.embeddedDropdownMenu
 end
 
 function WSkin.RegisterWindowBorder(host, defaultEdge, body, topLeft, bottomRight)
@@ -328,6 +398,17 @@ function WSkin.RegisterWindowBorder(host, defaultEdge, body, topLeft, bottomRigh
     else
         PaintWindowBorder(host, d)
     end
+end
+
+function WSkin.RegisterWindowIconBorder(host, defaultEdge, tint, corners)
+    local d = GetFFD(host)
+    d.windowIconCell = true
+    d.windowItemQuality = tint ~= nil
+    d.windowBorderTint = tint
+    d.windowIconCorners = corners
+    d.windowModeTab = corners ~= nil
+    d.windowOpaqueBorder = true
+    WSkin.RegisterWindowBorder(host, defaultEdge)
 end
 
 function WSkin.SetWindowBorderTint(host, color)
@@ -349,6 +430,16 @@ function WSkin.RefreshBorders()
     for host, d in pairs(windowBorders) do PaintWindowBorder(host, d) end
     if WSkin.RefreshLootWindowBorder then WSkin.RefreshLootWindowBorder() end
     WSkin.RefreshIconCorners()
+end
+
+function WSkin.RefreshFrameCorners()
+    if InCombatLockdown() then
+        ns.CombatQueue.Defer("WindowFrameCorners", WSkin.RefreshFrameCorners)
+        return
+    end
+    for host, d in pairs(windowBorders) do
+        if not d.windowIconCell then PaintWindowBorder(host, d) end
+    end
 end
 
 -- Re-resolve every registered shell (style switches + Modern color edits apply
@@ -425,7 +516,11 @@ function WSkin.Shell(winKey, frame, opts)
 
         -- Cover-fit: crop the atlas so it fills the frame without stretching.
         local function UpdateBgTexCoords()
+            -- A resizable shell may already carry its window-corner mask.
+            local mask = bg:GetNumMaskTextures() == 1 and bg:GetMaskTexture(1)
+            if mask then bg:RemoveMaskTexture(mask) end
             WSkin.CoverFit(bg, frame:GetSize())
+            if mask then bg:AddMaskTexture(mask) end
         end
         -- One script hook instead of three setter hooks: it also fires for
         -- anchor-driven resizes the setters never saw.
@@ -484,8 +579,8 @@ function WSkin.AtlasBorder(frame, body)
         edge:SetAtlas(BORDER_ATLAS)
         edge:SetAllPoints(ov)
     else
-        AddBorder(frame)
-        edge = (EUI.PanelPP or EUI.PP).GetBorders(frame)
+        AddBorder(ov)
+        edge = (EUI.PanelPP or EUI.PP).GetBorders(ov)
     end
     WSkin.RegisterWindowBorder(ov, edge, body or frame)
 end
@@ -1018,15 +1113,46 @@ local windowIcons = setmetatable({}, { __mode = "k" })
 local function PaintIconCorners(icon)
     local d = windowIcons[icon]
     local db = EllesmereUIDB
-    local radius = db and db.blizzWinBorderTexture and db.blizzWinIconCornerRadius or 0
+    local style = db and db.blizzWinBorderTexture
+    local radius = style and EUI.RoundedStyleOK(style) and db.blizzWinIconCornerRadius or 0
     local st = d.auraRound
-    if radius <= 0 and not (st and st.on) then return end
+    local nativeMask, highlight = d.iconNativeMask, d.iconHighlight
+    if radius <= 0 and not (st and st.on) and not nativeMask and not d.iconSoftBorder then return end
     if icon:IsForbidden() then return end
     local owner = icon:GetParent()
     if not owner or owner:IsForbidden() then return end
     if InCombatLockdown() then
         ns.CombatQueue.Defer("WindowIconCorners", WSkin.RefreshIconCorners)
         return
+    end
+    if nativeMask then
+        local configured = WSkin.IsModeTabBorderStyle(style)
+        local mask = nativeMask
+        if radius > 0 then
+            mask = nil -- The aura renderer owns the rounded mask.
+        elseif configured then
+            if not d.iconSquareMask then
+                local square = owner:CreateMaskTexture()
+                square:SetBlockingLoadsRequested(true)
+                square:SetTexture("Interface\\Buttons\\WHITE8X8", "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+                square:SetAllPoints(icon)
+                d.iconSquareMask = square
+            end
+            mask = d.iconSquareMask
+        end
+        local oldMask = d.iconBaseMask
+        if oldMask ~= mask then
+            if oldMask then
+                icon:RemoveMaskTexture(oldMask)
+                highlight:RemoveMaskTexture(oldMask)
+            end
+            if mask then
+                if st and st.on then EUI.RoundAuraCorners(owner, d, icon, nil, false, 0) end
+                icon:AddMaskTexture(mask)
+                highlight:AddMaskTexture(mask)
+            end
+            d.iconBaseMask = mask
+        end
     end
     if radius > 0 then
         local count = icon:GetNumMaskTextures()
@@ -1038,8 +1164,19 @@ local function PaintIconCorners(icon)
     end
     local border = d.iconBorder
     local cell = border and windowBorders[border]
+    local corners = cell and cell.windowIconCorners
     if cell and cell.windowIconCell then
-        border = db and db.blizzWinBorderTexture == "solid" and cell.windowCustomBorder
+        if radius > 0 and (style == "glow" or style == "shadow")
+            and (cell.windowItemQuality or cell.windowModeTab) and cell.windowCustomBorder then
+            EUI.RoundCorners(border, radius, {
+                border = cell.windowCustomBorder, style = style, roots = noRoots, corners = corners,
+            })
+            d.iconSoftBorder = border
+        elseif d.iconSoftBorder then
+            EUI.RoundCorners(d.iconSoftBorder, 0)
+            d.iconSoftBorder = nil
+        end
+        border = style == "solid" and cell.windowCustomBorder
     end
     if radius > 0 and not border and d.iconLines then
         if not d.roundIconBorder then
@@ -1063,11 +1200,14 @@ local function PaintIconCorners(icon)
         ok, w, h = pcall(rect.GetSize, rect)
         if not ok or issecretvalue(w) or issecretvalue(h) or not w or not h or w <= 0 or h <= 0 then return end
     end
-    st = EUI.RoundAuraCorners(owner, d, icon, nil, border or false, radius, w, h)
+    st = EUI.RoundAuraCorners(owner, d, icon, nil, border or false, radius, w, h, corners)
     if st then
         if border then EUI.TrackRoundedBorderColor(st, border) end
         EUI.MaskRoundedIconLayer(st, d.iconBackground)
         EUI.MaskRoundedIconLayer(st, d.iconHighlight)
+        if d.iconEffects then
+            for _, effect in ipairs(d.iconEffects) do EUI.MaskRoundedIconLayer(st, effect) end
+        end
         if cell and cell.windowIconCell then
             EUI.MaskRoundedIconLayer(st, owner.GetPushedTexture and owner:GetPushedTexture())
             EUI.MaskRoundedIconLayer(st, owner.GetDisabledTexture and owner:GetDisabledTexture())
@@ -1089,12 +1229,16 @@ function WSkin.RefreshIconCorners()
     for icon in pairs(windowIcons) do PaintIconCorners(icon) end
 end
 
-function WSkin.RegisterWindowIcon(icon, border, background)
+function WSkin.RegisterWindowIcon(icon, border, background, highlight, nativeMask, squareMask, effects)
     if not (icon and icon.AddMaskTexture and icon.GetNumMaskTextures) then return end
     local d = GetFFD(icon)
     windowIcons[icon] = d
     if border ~= nil then d.iconBorder = border end
     if background then d.iconBackground = background end
+    if highlight then d.iconHighlight = highlight end
+    if effects then d.iconEffects = effects end
+    if nativeMask and not d.iconNativeMask then d.iconNativeMask, d.iconBaseMask = nativeMask, nativeMask end
+    if squareMask then d.iconSquareMask = squareMask end
     PaintIconCorners(icon)
 end
 
@@ -1104,10 +1248,12 @@ function WSkin.SetIconCrop(icon, inset, sourceIcon)
     if pcall(icon.SetTexCoord, icon, inset, 1 - inset, inset, 1 - inset) then return true end
     local d = windowIcons[sourceIcon or icon]
     local st = d and d.auraRound
-    if not (st and st.on and icon:GetNumMaskTextures() == 1 and icon:GetMaskTexture(1) == st.mask) then return end
-    icon:RemoveMaskTexture(st.mask)
+    if not d or icon:GetNumMaskTextures() ~= 1 then return end
+    local mask = icon:GetMaskTexture(1)
+    if mask ~= d.iconNativeMask and mask ~= d.iconSquareMask and not (st and st.on and mask == st.mask) then return end
+    icon:RemoveMaskTexture(mask)
     local ok = pcall(icon.SetTexCoord, icon, inset, 1 - inset, inset, 1 - inset)
-    icon:AddMaskTexture(st.mask)
+    icon:AddMaskTexture(mask)
     return ok
 end
 
@@ -1374,7 +1520,7 @@ end
 
 -- The stock rounding only: an item button's own Mask as the icon's one mask.
 -- Any other mask is a shape, and the icon stays native.
-function ItemCrop.Unround(btn, icon)
+function WSkin.RemoveStockItemMask(btn, icon)
     if btn.IsForbidden and btn:IsForbidden() then return end
     local m = btn.Mask
     if not (m and type(btn.SetItemButtonTexture) == "function" and icon.GetNumMaskTextures
@@ -1424,7 +1570,7 @@ end
 function WSkin.SquareIcon(icon, parent, quality)
     if not icon or not icon.SetTexCoord then return end
     local btn = parent or (icon.GetParent and icon:GetParent())
-    if btn then ItemCrop.Unround(btn, icon) end
+    if btn then WSkin.RemoveStockItemMask(btn, icon) end
     -- A texture with a MaskTexture rejects SetTexCoord outright (hard Lua
     -- error, e.g. the special first-catch loot toast masks its icon). Leave
     -- masked icons fully native -- no crop, and no square border drawn
@@ -2117,16 +2263,14 @@ function WSkin.HookShow(frame, fn)
     frame:HookScript("OnShow", fn)
 end
 
--- A common-sidetab side tab (the WoW Forever Looking For Group and Progress
--- Legacy windows): the gold frame and glow go, the icon stays. A black copy of
--- the hover art is the idle border; hover (gold) and active (soft white) draw over it.
-function WSkin.SideTab(tab)
+-- An explicit house state toggles only the rim; the caller owns the native art.
+function WSkin.SideTab(tab, useHouseStyle)
     if not tab then return end
-    if tab.Background then tab.Background:SetAlpha(0) end
-    if tab.TabGlow then tab.TabGlow:SetAlpha(0) end
     local st = tab.SelectedTexture
     if not st then return end
     local d = GetFFD(tab)
+    local house = useHouseStyle ~= false
+    if not house and not d.tabBorder then return end
     if not d.tabBorder then
         local b = tab:CreateTexture(nil, "OVERLAY", nil, -1)
         b:SetAtlas("common-sidetab-hover")
@@ -2134,7 +2278,12 @@ function WSkin.SideTab(tab)
         b:SetVertexColor(0, 0, 0)
         d.tabBorder = b
     end
-    st:SetVertexColor(0.90, 0.90, 0.92)
+    d.tabBorder:SetShown(house)
+    if useHouseStyle == nil then
+        if tab.Background then tab.Background:SetAlpha(0) end
+        if tab.TabGlow then tab.TabGlow:SetVertexColor(1, 1, 1, 0) end
+        st:SetVertexColor(0.90, 0.90, 0.92)
+    end
 end
 
 -- Debounce: collapse many hook fires in one frame into a single pass.

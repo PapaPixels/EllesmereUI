@@ -2270,7 +2270,7 @@ do
         -- The per-look window slots ride with the enables they describe.
         "windowSkinStyleSlots",
         "blizzWindowSkinStyles", "blizzWindowModernDefault", "blizzWindowBackground",
-        "blizzWindowLegacyBackgrounds", "blizzWinCornerRadius", "blizzWinIconCornerRadius",
+        "blizzWindowLegacyBackgrounds", "blizzWinCornerRadius", "blizzWinIconCornerRadius", "blizzWinBorderSizes",
         "blizzWinAccentBar", "blizzWinBarFill", "blizzWinLinks",
         "thirdPartySkinsOff", "thirdPartySkinAddons",
     })

@@ -76,6 +76,8 @@ local MEDIA = "Interface\\AddOns\\EllesmereUI\\media\\rounded\\"
 local GLOW_EDGE = "Interface\\AddOns\\EllesmereUI\\media\\borders\\glow-border"
 local MAX_RADIUS = 16 -- rounded-1.tga .. rounded-16.tga
 local ALL_CORNERS = 15
+local LEFT_CORNERS = 1 + 4
+local RIGHT_CORNERS = 2 + 8
 -- Glow corner art (the generator's constants match these): glow-corner-1..NA
 -- for a radius of at least half the glow width E, by f = band width / radius
 -- in even log steps from FMIN to 2; glow-tight-1..NB below that, by
@@ -326,10 +328,10 @@ local function StripInterior(mask, cont)
     mask:SetPoint("BOTTOMRIGHT", cont._right, "BOTTOMLEFT", 0, 0)
 end
 
-local function Inset(mask, rect, edge)
+local function Inset(mask, rect, edge, left, right)
     mask:ClearAllPoints()
-    mask:SetPoint("TOPLEFT", rect, "TOPLEFT", edge, -edge)
-    mask:SetPoint("BOTTOMRIGHT", rect, "BOTTOMRIGHT", -edge, edge)
+    mask:SetPoint("TOPLEFT", rect, "TOPLEFT", left or edge, -edge)
+    mask:SetPoint("BOTTOMRIGHT", rect, "BOTTOMRIGHT", right or -edge, edge)
 end
 
 local function SolidOff(st)
@@ -487,7 +489,7 @@ end
 -- AuraKit calls this on a style pass, with public layout dimensions. Touch
 -- only the icon, swipe and PP ring. Pass false for a borderless icon to fit
 -- the same full-texture mask directly to its artwork.
-function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h)
+function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h, corners)
     local st = d.auraRound
     local cont = radius and radius > 0 and border and EllesmereUI.PP.GetBorders(border)
     local artworkOnly = border == false and icon and radius and radius > 0
@@ -508,8 +510,9 @@ function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h)
     end
     edge = min(edge, cap)
     radius = min(MAX_RADIUS, max(1, floor(radius + 0.5)), max(1, floor(cap)))
+    corners = corners or ALL_CORNERS
     if not st then
-        st = { rect = rect, corners = ALL_CORNERS, aura = true }
+        st = { rect = rect, corners = corners, aura = true }
         if icon then
             st.mask = owner:CreateMaskTexture()
             st.mask:SetBlockingLoadsRequested(true)
@@ -518,7 +521,8 @@ function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h)
     end
     if st.on and st.rect ~= rect then ClearAuraCorners(st, owner, icon, cd) end
     local color = cont and cont._bdColor
-    if st.on and st.radius == radius and st.edge == edge and st.w == w and st.h == h and st.cont == cont then
+    if st.on and st.radius == radius and st.edge == edge and st.w == w and st.h == h
+        and st.cont == cont and st.corners == corners then
         if color and (st.r ~= color[1] or st.g ~= color[2] or st.b ~= color[3] or st.a ~= color[4]) then
             st.solid.fill:SetVertexColor(unpack(color))
         end
@@ -539,8 +543,15 @@ function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h)
             if shape > 1 and (shape - 1) * min(bodyW, bodyH) / 32 >= radius - 3 * edge then
                 shape = shape - 1
             end
+            local left, right
+            if corners == RIGHT_CORNERS or corners == LEFT_CORNERS then
+                -- Stretch the square side past the artwork's edge.
+                shape = max(1, shape - 1)
+                local extension = bodyW * shape / (32 - shape)
+                if corners == RIGHT_CORNERS then left = edge - extension else right = extension - edge end
+            end
             EllesmereUI.SetAuraIconMask(st.mask, shape)
-            Inset(st.mask, rect, edge)
+            Inset(st.mask, rect, edge, left, right)
             if not AddMask(icon, st.mask) then
                 if st.on then ClearAuraCorners(st, owner, icon, cd) end
                 return
@@ -554,7 +565,7 @@ function EllesmereUI.RoundAuraCorners(owner, d, icon, cd, border, radius, w, h)
             st.swipeEnd = { x = right, y = bottom }
             if cd then EllesmereUI.ApplyRoundedIconSwipe(cd, st) end
         end
-        st.on = true
+        st.on, st.corners = true, corners
         if cont then SolidOn(st, cont, radius, inner) else SolidOff(st) end
         if not st.poolCleanup and POOL.Gen and POOL.Gen(owner) then
             st.poolCleanup = POOL.Attach(owner, cont and st.solid.fill or st.mask, nil, function()

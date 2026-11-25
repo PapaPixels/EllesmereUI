@@ -1468,6 +1468,7 @@ do
         owners = setmetatable({}, { __mode = "k" }),         -- owner -> fn (RegisterPxReapply)
         edgeFill = setmetatable({}, { __mode = "k" }),       -- borderFrame -> true (SetBorderEdgeFill)
         snapHost = setmetatable({}, { __mode = "k" }),       -- borderFrame -> host (SetBorderSnapHost)
+        pixelSampling = setmetatable({}, { __mode = "k" }),
     }
 
     --- px, step, tex of a *Px value; nil for nil / false / anything else.
@@ -1562,12 +1563,12 @@ do
     --- the lead overlaps anchor; else it is anchor's side toward the lead and the lead
     --- hangs past anchor. Hides tex when the style has no divider or its border is off.
     --- The caller tints tex. Settings and UI-scale re-layout passes only.
-    function EllesmereUI.PlaceBorderDividerV(tex, anchor, right, over, textureKey, step, edgePx, es)
+    function EllesmereUI.PlaceBorderDividerV(tex, anchor, right, over, textureKey, step, edgePx, es, filter)
         local thick = EllesmereUI.BorderCompanionThickness(textureKey, step, edgePx, es)
         if not thick or thick <= 0 then tex:Hide(); return end
         local PP = EllesmereUI.PP
         local lead = PP.SnapForES(thick * 2 / EllesmereUI.GetBorderCompanion(textureKey, "sepSize"), es)
-        tex:SetTexture(EllesmereUI.GetBorderCompanion(textureKey, "sepV"))
+        tex:SetTexture(EllesmereUI.GetBorderCompanion(textureKey, "sepV"), nil, nil, filter)
         tex:ClearAllPoints()
         if right then
             tex:SetTexCoord(1, 0, 0, 1)
@@ -1891,7 +1892,8 @@ do
             -- owner-width guard can pass while this anchored rect resolves secret, so the guard
             -- must sit here. Unchanged style (tooltips re-skin every Show) skips the template; a
             -- real style change under a secret size keeps the last-good backdrop and retries next apply (the color write below is vertex-only and always safe).
-            local bdKey = texPath .. "@" .. edgeSize
+            local nearest = _px.pixelSampling[borderFrame] and EllesmereUI._pixelArtBorders[textureKey]
+            local bdKey = texPath .. "@" .. edgeSize .. (nearest and "@nearest" or "")
             if bdFrame._euiBdKey ~= bdKey then
                 local bdUsable, bdW = ReadBorderSize(bdFrame)
                 if not bdUsable or not bdW then
@@ -1903,6 +1905,18 @@ do
                         insets = { left = 0, right = 0, top = 0, bottom = 0 },
                     })
                     bdFrame._euiBdKey = bdKey
+                    if nearest then
+                        for _, name in ipairs({ "TopLeftCorner", "TopRightCorner", "BottomLeftCorner", "BottomRightCorner",
+                            "TopEdge", "BottomEdge", "LeftEdge", "RightEdge" }) do
+                            local piece = bdFrame[name]
+                            if piece then
+                                piece:SetTexture(texPath, "REPEAT", "REPEAT", "NEAREST")
+                                piece:SetSnapToPixelGrid(true)
+                                piece:SetTexelSnappingBias(0)
+                            end
+                        end
+                        bdFrame:SetupTextureCoordinates()
+                    end
                 end
             end
             bdFrame:SetBackdropBorderColor(r, g, b, a)
@@ -2251,6 +2265,10 @@ do
     --- Opts a border into the Pixels edge fill (see ApplyBorderStyle) from its next apply.
     function EllesmereUI.SetBorderEdgeFill(borderFrame, on)
         _px.edgeFill[borderFrame] = on or nil
+    end
+
+    function EllesmereUI.SetBorderPixelSampling(borderFrame, on)
+        _px.pixelSampling[borderFrame] = on or nil
     end
 
     --- ApplyBorderStyle snaps this border ignoring host's parent's own scale (engine-animated).

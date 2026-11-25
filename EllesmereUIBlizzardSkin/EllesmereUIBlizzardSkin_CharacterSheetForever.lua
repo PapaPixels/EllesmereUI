@@ -11,26 +11,26 @@ if EUI_CLIENT_BLOCKED then return end -- pre-12.1 client failsafe (EllesmereUI_C
 --      Blizzard window uses;
 --    - every piece of frame art stripped: the pane backdrops and stone
 --      header, the item slot frames, the class icon and its ring, the rock
---      strip under the level line, the right-pane collapse arrow;
+--      strip under the level line, and the stock model controls;
 --    - the retail sheet's model backdrop behind the character, cover-cropped
 --      to the model area, and the retail sidebar's darker panel behind the
---      stats (its left edge is the divider between the two panes);
+--      stats, with themed dividers under the title and between the panes;
 --    - the item slots as on retail: icons cropped by the Icon Zoom setting,
---      a grey square behind each and a 2px border in the item's quality
---      color (dark grey when empty), recolored through Blizzard's own
---      per-slot update;
+--      a grey square behind each and the configured window border, with
+--      the default rarity-colored edge following Blizzard's per-slot update;
 --    - text beside each slot where retail shows its item level and upgrade
 --      track: the item level (Show Item Level: beside the slot unless set,
 --      or inside its icon, or never) and, with Show Item Stats on (off
 --      unless turned on), the item's main and secondary stat, or its armor
 --      when it has no stats, and a weapon's damage per second under that;
 --      the enchant name under those, painted through the same per-slot
---      update; retail's top-left eyeball hides it all for the session;
+--      update; the top-left eyeball toggles it for the current character;
 --    - the character name and the "Level N Class" line in the house font,
 --      as on retail (Blizzard keeps writing the text, so the class color
 --      and the pvp title still come from the client);
 --    - the stats list stays Blizzard's list on Blizzard's scrollbar, whose
---      track and thumb take the house thin style in place (arrows kept);
+--      track and thumb appear on hover, and its bottom fades when more rows
+--      can be scrolled into view. The sidebar tabs use text labels;
 --      its category headers and values take the retail sidebar's color
 --      system (per-category colors, the user's overrides from the options
 --      page, the thin header bars) through the scroll box's own frame
@@ -88,22 +88,13 @@ local function FontPath()
 end
 
 local MEDIA = "Interface\\AddOns\\EllesmereUIBlizzardSkin\\Media\\"
+local ICONS = "Interface\\AddOns\\EllesmereUI\\media\\icons\\"
+local SIDE_ARROW = ICONS .. "right-arrow.png"
 
--- The retail sheet's Icon Zoom setting (same key, same default).
+ns.ForeverIconZoomDefault = 0.14
+
 local function Zoom()
-    return (EllesmereUIDB and EllesmereUIDB.charSheetIconZoom) or 0.07
-end
-
--- Blizzard pieces that must go for good are parked under a hidden frame:
--- Hide() gets undone by the client's own refreshes, a hidden parent does not.
-local Bin
-local function Discard(region)
-    if not region or not region.SetParent then return end
-    if not Bin then
-        Bin = CreateFrame("Frame")
-        Bin:Hide()
-    end
-    region:SetParent(Bin)
+    return (EllesmereUIDB and EllesmereUIDB.charSheetIconZoom) or ns.ForeverIconZoomDefault
 end
 
 --------------------------------------------------------------------------------
@@ -209,12 +200,54 @@ local function SkinRow(frame, r, g, b)
     if frame.Value then frame.Value:SetTextColor(r, g, b, 1) end
 end
 
+local RESISTANCE_ATLAS_PREFIX = "UI-Character-Info-Resistance-"
+local function SkinResistanceIcon(frame, d, atlas)
+    local stock = frame.Icon
+    if not stock then return end
+    if not atlas or atlas:sub(1, #RESISTANCE_ATLAS_PREFIX) ~= RESISTANCE_ATLAS_PREFIX then
+        if d.resistanceIcon then
+            d.resistanceIcon:GetParent():Hide()
+            stock:SetAlpha(1)
+        end
+        return
+    end
+
+    local WSkin = ns.WSkin
+    local icon = d.resistanceIcon
+    if not icon then
+        local host = CreateFrame("Frame", nil, frame)
+        host:SetSize(16, 16)
+        host:SetPoint("CENTER", stock)
+        icon = host:CreateTexture(nil, "ARTWORK")
+        icon:SetAllPoints(host)
+        EllesmereUI.PP.CreateBorder(host, 0.25, 0.25, 0.25, 1, 1, "OVERLAY")
+        WSkin.RegisterWindowIconBorder(host, EllesmereUI.PP.GetBorders(host))
+        d.resistanceIcon = icon
+    end
+    if d.resistanceAtlas ~= atlas then
+        icon:SetAtlas(atlas)
+        WSkin.SetIconCrop(icon, 0.18)
+        if not d.resistanceAtlas then WSkin.RegisterWindowIcon(icon, icon:GetParent()) end
+        d.resistanceAtlas = atlas
+    end
+    stock:SetAlpha(0)
+    icon:GetParent():Show()
+end
+
 local function SkinElement(box, frame, elementData)
     if not frame or not elementData then return end
+    local hover = GetFFD(box).statsHover
+    local d = GetFFD(frame)
+    if hover and not d.statsHover then
+        d.statsHover = true
+        frame:HookScript("OnEnter", hover)
+        frame:HookScript("OnLeave", hover)
+    end
     if elementData.isHeader then
         SkinHeader(frame, CategoryColor(elementData.name))
     else
         SkinRow(frame, CategoryColor(CategoryOf(box, elementData)))
+        SkinResistanceIcon(frame, d, elementData.atlas)
     end
 end
 
@@ -270,9 +303,7 @@ local function FadeChildren(frame, Fade)
     end
 end
 
--- The equipped item's quality color; nothing when the slot is empty.
-local function QualityColor(slot)
-    local quality = GetInventoryItemQuality("player", slot:GetID())
+local function ItemQualityColor(quality)
     if quality and not (issecretvalue and issecretvalue(quality)) then
         local r, g, b
         if C_Item and C_Item.GetItemQualityColor then
@@ -284,6 +315,11 @@ local function QualityColor(slot)
     end
 end
 
+-- The equipped item's quality color; nothing when the slot is empty.
+local function QualityColor(slot)
+    return ItemQualityColor(GetInventoryItemQuality("player", slot:GetID()))
+end
+
 -- The slot border color: the equipped item's quality, dark grey when empty
 -- (the retail sheet's values).
 local function SlotBorderColor(slot)
@@ -292,12 +328,19 @@ local function SlotBorderColor(slot)
     return 0.4, 0.4, 0.4
 end
 
-local function ColorSlotBorder(slot)
+local function ColorSlotBorder(slot, border)
     local PanelPP = EllesmereUI.PanelPP
     if not (PanelPP and PanelPP.SetBorderColor) then return end
     local r, g, b = SlotBorderColor(slot)
-    PanelPP.SetBorderColor(slot, r, g, b, 1)
-    EllesmereUI.RoundedBorderColor(slot, r, g, b, 1)
+    local d = ns.WSkin.GetFFD(border)
+    local color = d.windowBorderTint
+    if color then
+        if r == color.r and g == color.g and b == color.b then return end
+        color.r, color.g, color.b = r, g, b
+        EllesmereUI.SetBorderStyleColor(d.windowCustomBorder, r, g, b, 1)
+    end
+    PanelPP.SetBorderColor(border, r, g, b, 1)
+    EllesmereUI.RoundedBorderColor(border, r, g, b, 1)
 end
 
 --------------------------------------------------------------------------------
@@ -920,31 +963,95 @@ EllesmereUI._refreshEnchantsVisibility = RefreshSlotText
 EllesmereUI._refreshCharSheetSlotLabels = RefreshSlotText
 EllesmereUI._applyCharSheetTextSizes = RefreshSlotText
 
+local function VisitSlotChrome(slot, visit)
+    visit(slot:GetNormalTexture())
+    visit(slot:GetPushedTexture())
+    visit(slot:GetHighlightTexture())
+    visit(slot.IconBorder)
+end
+
+local function HideSlotTexture(texture)
+    if texture then texture:SetAlpha(0) end
+end
+
+local function SuppressSlotChrome(slot)
+    VisitSlotChrome(slot, HideSlotTexture)
+end
+
+local ACTION_BAR_MEDIA = "Interface\\AddOns\\EllesmereUIActionBars\\Media\\"
+local GLOW_GOLD = { r = 1, g = 0.75, b = 0.24 }
+local function BuildSlotHover(slot, bounds)
+    local glow = slot:CreateTexture(nil, "HIGHLIGHT")
+    glow:SetAllPoints(bounds or slot)
+    glow:SetTexture(ACTION_BAR_MEDIA .. "highlight-2.png")
+    glow:SetBlendMode("ADD")
+    glow:SetVertexColor(0.35, 0.65, 1)
+
+    local flash = slot:CreateTexture(nil, "OVERLAY")
+    flash:SetAllPoints(glow)
+    flash:SetTexture(ACTION_BAR_MEDIA .. "highlight-3.png")
+    flash:SetBlendMode("ADD")
+    flash:SetVertexColor(1, 1, 1)
+    flash:Hide()
+    local animation = flash:CreateAnimationGroup()
+    local fade = animation:CreateAnimation("Alpha")
+    fade:SetFromAlpha(1)
+    fade:SetToAlpha(0)
+    fade:SetDuration(0.18)
+    animation:SetScript("OnFinished", function() flash:Hide() end)
+    slot:HookScript("OnMouseDown", function()
+        if not glow:IsShown() then return end
+        animation:Stop()
+        flash:Show()
+        animation:Play()
+    end)
+    slot:HookScript("OnHide", function()
+        animation:Stop()
+        flash:Hide()
+    end)
+    return glow, flash
+end
+
 -- Blizzard refreshes every shown slot through this on equipment changes and
 -- on show; the border and the slot text follow. Foreign item buttons (bags)
 -- have no entry.
 local function OnSlotUpdate(slot)
     local d = FFD[slot]
     if not d then return end
-    if d.border then ColorSlotBorder(slot) end
+    local icon = d.cropIcon
+    if d.skinnedSlotChrome then SuppressSlotChrome(slot) end
+    -- SetItemButtonTexture can restore the full texture during a slot refresh.
+    if icon then
+        if math.abs(icon:GetTexCoord() - d.crop) > 0.0001 then ns.WSkin.SetIconCrop(icon, d.crop) end
+        local db = EllesmereUIDB
+        local style = db and db.blizzWinBorderTexture
+        if style and EllesmereUI.RoundedStyleOK(style) and (db.blizzWinIconCornerRadius or 0) > 0 and icon:GetNumMaskTextures() == 0 then
+            ns.WSkin.RegisterWindowIcon(icon)
+        end
+    end
+    if d.border then ColorSlotBorder(slot, d.border) end
     if d.stats then PaintSlotText(slot) end
 end
 
--- Both looks follow that update through one hook, installed once.
 local slotHooked = false
 local function HookSlotUpdates()
     if slotHooked or type(_G.PaperDollItemSlotButton_Update) ~= "function" then return end
     slotHooked = true
     hooksecurefunc("PaperDollItemSlotButton_Update", OnSlotUpdate)
+    hooksecurefunc("SetItemButtonQuality", function(slot)
+        local d = FFD[slot]
+        if d and d.skinnedSlotChrome then HideSlotTexture(slot.IconBorder) end
+    end)
 end
 
 -- One slot's dress, the same on this sheet and on the inspect sheet
 -- (ns.ForeverSkinSlot): the bronze frame and the button art off, the quality
--- ring collapsed, the icon cropped, a grey square behind it and a 2px border
+-- ring suppressed, the icon cropped, a grey square behind it and a border
 -- that the sheet colors by its item. Once per slot.
-local function DressSlot(slot, slotName, Fade)
-    if GetFFD(slot).done then return end
-    GetFFD(slot).done = true
+local function DressSlot(slot, slotName, Fade, themedBorder)
+    local d = GetFFD(slot)
+    if d.done then return end
+    d.done = true
     -- The bronze slot frame lives on a child frame; the button art is the
     -- named NormalTexture (hidden, not faded: the client rewrites its vertex
     -- color, and with it the alpha, on every item update).
@@ -962,35 +1069,62 @@ local function DressSlot(slot, slotName, Fade)
     end
     local normal = _G[slotName .. "NormalTexture"] or (slot.GetNormalTexture and slot:GetNormalTexture())
     if normal then normal:Hide() end
-    -- Blizzard's quality ring gets re-shown and recolored on every item
-    -- update, so it is collapsed onto one blank texel instead of hidden.
-    if slot.IconBorder then slot.IconBorder:SetTexCoord(0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8) end
+    if themedBorder then
+        d.skinnedSlotChrome = true
+        SuppressSlotChrome(slot)
+        slot:HookScript("OnClick", SuppressSlotChrome)
+    elseif slot.IconBorder then
+        slot.IconBorder:SetTexCoord(0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8, 0.8)
+    end
     -- The item icon is the button's own; the ammo slot also declares a
     -- legacy texture under the same global name, which is not it.
     local icon = slot.icon or _G[slotName .. "IconTexture"]
     if icon then
+        if themedBorder then ns.WSkin.RemoveStockItemMask(slot, icon) end
         local z = Zoom()
-        icon:SetTexCoord(z, 1 - z, z, 1 - z)
+        ns.WSkin.SetIconCrop(icon, z)
+        if themedBorder then d.cropIcon, d.crop = icon, z end
     end
     local bg = slot:CreateTexture(nil, "BACKGROUND", nil, -5)
     bg:SetAllPoints(slot)
     bg:SetColorTexture(0.5, 0.5, 0.5, 0.7)
-    GetFFD(slot).bg = bg
+    local hover, flash
+    if themedBorder then
+        hover, flash = BuildSlotHover(slot, icon)
+        local glow = slot:CreateTexture(nil, "OVERLAY")
+        glow:SetAllPoints(hover)
+        glow:SetTexture(ACTION_BAR_MEDIA .. "highlight-3.png")
+        glow:SetBlendMode("ADD")
+        glow:SetVertexColor(hover:GetVertexColor())
+        glow:Hide()
+        d.altFlyoutGlow = glow
+    end
     local PanelPP = EllesmereUI.PanelPP
     if PanelPP and PanelPP.CreateBorder then
-        PanelPP.CreateBorder(slot, 0.4, 0.4, 0.4, 1, 2, "OVERLAY", 1)
-        local borders = PanelPP.GetBorders and PanelPP.GetBorders(slot)
+        local host = slot
+        if themedBorder then
+            host = CreateFrame("Frame", nil, slot)
+            host:SetAllPoints(slot)
+            host:SetFrameLevel(slot:GetFrameLevel())
+        end
+        PanelPP.CreateBorder(host, 0.4, 0.4, 0.4, 1, themedBorder and 1 or 2, "OVERLAY", 1)
+        local borders = PanelPP.GetBorders(host)
         if borders then borders:SetFrameLevel(slot:GetFrameLevel()) end
-        GetFFD(slot).border = true
-        ns.WSkin.RegisterWindowIcon(icon, slot, bg)
+        d.border = host
+        local WSkin = ns.WSkin
+        if themedBorder then
+            local r, g, b = SlotBorderColor(slot)
+            PanelPP.SetBorderColor(host, r, g, b, 1)
+            WSkin.RegisterWindowIconBorder(host, borders, { r = r, g = g, b = b })
+        end
+        WSkin.RegisterWindowIcon(icon, host, bg, hover, nil, nil, hover and { flash, d.altFlyoutGlow })
     end
 end
 
 local function SkinSlot(slotName, Fade)
     local slot = _G[slotName]
-    if not slot or GetFFD(slot).done then return end
-    DressSlot(slot, slotName, Fade)
-    if GetFFD(slot).border then ColorSlotBorder(slot) end
+    if not slot then return end
+    DressSlot(slot, slotName, Fade, true)
 end
 
 -- The inspect sheet's slots: the same dress, the border colored by that
@@ -1003,7 +1137,7 @@ function ns.ForeverSkinSlot(slot, slotName)
     local icon = slot.icon or _G[slotName .. "IconTexture"]
     if icon then
         local z = Zoom()
-        icon:SetTexCoord(z, 1 - z, z, 1 - z)
+        ns.WSkin.SetIconCrop(icon, z)
     end
 end
 
@@ -1013,10 +1147,10 @@ function EllesmereUI._refreshCharSheetIconZoom()
     if not Enabled() then return end
     local z = Zoom()
     for i = 1, #SLOTS do
-        local slot = _G[SLOTS[i]]
-        if slot and FFD[slot] and FFD[slot].done then
-            local icon = slot.icon or _G[SLOTS[i] .. "IconTexture"]
-            if icon then icon:SetTexCoord(z, 1 - z, z, 1 - z) end
+        local d = FFD[_G[SLOTS[i]]]
+        if d and d.cropIcon then
+            d.crop = z
+            ns.WSkin.SetIconCrop(d.cropIcon, z)
         end
     end
 end
@@ -1026,18 +1160,21 @@ end
 --------------------------------------------------------------------------------
 local IMG_ASPECT = 787 / 1030   -- character-bg.png
 
--- Cover crop: the image keeps its aspect and the box shows its centre.
 local function CoverCrop(tex, w, h)
     if issecretvalue and (issecretvalue(w) or issecretvalue(h)) then return end
     if not w or not h or w <= 0 or h <= 0 then return end
-    local box = w / h
-    if box > IMG_ASPECT then
-        local trim = (1 - IMG_ASPECT / box) / 2
+    local aspect = w / h
+    -- This texture only takes the shared window mask. Lift it while cropping.
+    local mask = tex:GetNumMaskTextures() > 0 and tex:GetMaskTexture(1)
+    if mask then tex:RemoveMaskTexture(mask) end
+    if aspect > IMG_ASPECT then
+        local trim = (1 - IMG_ASPECT / aspect) / 2
         tex:SetTexCoord(0, 1, trim, 1 - trim)
     else
-        local trim = (1 - box / IMG_ASPECT) / 2
+        local trim = (1 - aspect / IMG_ASPECT) / 2
         tex:SetTexCoord(trim, 1 - trim, 0, 1)
     end
+    if mask then tex:AddMaskTexture(mask) end
 end
 
 -- Both panels draw above the shell's top bar (children of the frame render
@@ -1065,41 +1202,1965 @@ local function HideSceneArt(scene)
     end
 end
 
+local function SkinPaneToggle(frame, WSkin)
+    local button, pane = frame.RightPaneToggleButton, frame.LeftPaneHost
+    if not (button and pane and frame.IsRightPaneCollapsed and frame.UpdateRightPaneToggleButton)
+        or button:IsProtected() then return end
+    button:ClearAllPoints()
+    button:SetPoint("BOTTOMRIGHT", pane, "BOTTOMRIGHT", -7 - 3 * OnePixel(button), 7)
+    button:SetSize(20, 20)
+    WSkin.FadeRegions(button)
+
+    local arrow = button:CreateTexture(nil, "OVERLAY")
+    arrow:SetSize(12, 12)
+    arrow:SetPoint("CENTER")
+    arrow:SetTexture(SIDE_ARROW)
+    arrow:SetVertexColor(1, 1, 1, 0.75)
+    local function UpdateArrow()
+        button:GetNormalTexture():SetAlpha(0)
+        button:GetPushedTexture():SetAlpha(0)
+        if frame:IsRightPaneCollapsed() then
+            arrow:SetTexCoord(0, 1, 0, 1)
+        else
+            arrow:SetTexCoord(1, 0, 0, 1)
+        end
+    end
+    hooksecurefunc(frame, "UpdateRightPaneToggleButton", UpdateArrow)
+    button:HookScript("OnEnter", function() arrow:SetVertexColor(1, 1, 1, 1) end)
+    button:HookScript("OnLeave", function() arrow:SetVertexColor(1, 1, 1, 0.75) end)
+    UpdateArrow()
+end
+
+local CONTROL_WIDTH, CONTROL_ALPHA = 18, 0.4
+
+local function SkinControlFeedback(button, art)
+    local function Release()
+        art:SetPoint("CENTER", button, "CENTER", 0, 0)
+    end
+    local function Dim()
+        art:SetAlpha(CONTROL_ALPHA)
+    end
+    Dim()
+    button:HookScript("OnEnter", function() art:SetAlpha(0.85) end)
+    button:HookScript("OnLeave", Dim)
+    button:HookScript("OnMouseDown", function()
+        art:SetPoint("CENTER", button, "CENTER", 0, -1)
+    end)
+    button:HookScript("OnMouseUp", Release)
+    button:HookScript("OnHide", function()
+        Release()
+        Dim()
+    end)
+end
+
+local function SkinHeaderHover(frame, topBar, controls, close)
+    local header = CreateFrame("Frame", nil, frame)
+    header:SetAllPoints(topBar)
+    header:SetMouseMotionEnabled(true)
+    header:SetMouseClickEnabled(false)
+    header:SetPropagateMouseClicks(true)
+    header:SetPropagateMouseMotion(true)
+    local revealed
+    local function SetRevealed(show)
+        if revealed == show then return end
+        revealed = show
+        for _, button in ipairs(controls) do button:SetAlpha(show and 1 or 0.25) end
+    end
+    local function Reveal() SetRevealed(true) end
+    local function Refresh() SetRevealed(header:IsVisible() and header:IsMouseOver() or false) end
+    header:SetScript("OnEnter", Reveal)
+    header:SetScript("OnLeave", Refresh)
+    header:SetScript("OnShow", Refresh)
+    header:SetScript("OnHide", function() SetRevealed(false) end)
+    for _, button in ipairs(controls) do
+        button:HookScript("OnEnter", Reveal)
+        button:HookScript("OnLeave", Refresh)
+    end
+    if close then
+        close:HookScript("OnEnter", Reveal)
+        close:HookScript("OnLeave", Refresh)
+    end
+    Refresh()
+end
+
+local function SkinModelControls(scene, eye, WSkin)
+    local control = scene.ControlFrame
+    if not (control and eye) or control:IsProtected() then return end
+    local buttons = { control.zoomInButton, control.zoomOutButton,
+        control.rotateLeftButton, control.rotateRightButton, control.resetButton }
+    for i = 1, 5 do
+        if not buttons[i] or buttons[i]:IsProtected() then return end
+    end
+
+    local function KeepOpaque()
+        control:SetAlpha(1)
+    end
+    local function ShowControls()
+        if not InputUtil.IsGamepadUIEnabled() then control:Show() end
+    end
+    local function Layout()
+        for i, button in ipairs(buttons) do
+            button:ClearAllPoints()
+            button:SetPoint("LEFT", control, "LEFT", (i - 1) * CONTROL_WIDTH, 0)
+            button:Show()
+        end
+        control:SetSize(#buttons * CONTROL_WIDTH, 20)
+        KeepOpaque()
+    end
+
+    control:ClearAllPoints()
+    control:SetPoint("LEFT", eye, "RIGHT", 4, 0)
+    control:SetFrameStrata(eye:GetFrameStrata())
+    control:SetFrameLevel(eye:GetFrameLevel() + 1)
+    control:HookScript("OnLeave", KeepOpaque)
+    -- The controls are in the title bar, outside the model's hover area.
+    scene:HookScript("OnLeave", ShowControls)
+    for i, button in ipairs(buttons) do
+        WSkin.FadeRegions(button)
+        button:SetSize(CONTROL_WIDTH, 20)
+        button:SetHitRectInsets(0, 0, 0, 0)
+
+        local art = CreateFrame("Frame", nil, button)
+        art:SetSize(14, 14)
+        art:SetPoint("CENTER")
+        local icon = art:CreateTexture(nil, "ARTWORK")
+        if i <= 2 then
+            icon:SetColorTexture(1, 1, 1, 1)
+            icon:SetSize(10, 2)
+            icon:SetPoint("CENTER")
+            if i == 1 then
+                local stem = art:CreateTexture(nil, "ARTWORK")
+                stem:SetColorTexture(1, 1, 1, 1)
+                stem:SetSize(2, 10)
+                stem:SetPoint("CENTER")
+            end
+        else
+            local size = i == 5 and 14 or 12
+            icon:SetSize(size, size)
+            icon:SetPoint("CENTER")
+            icon:SetTexture(i == 5 and ICONS .. "unlock-reset.png" or SIDE_ARROW)
+            if i == 3 then icon:SetTexCoord(1, 0, 0, 1) end
+        end
+        button:HookScript("OnLeave", KeepOpaque)
+        SkinControlFeedback(button, art)
+    end
+    -- Blizzard can reflow the native buttons when it switches cameras.
+    hooksecurefunc(control, "UpdateLayout", Layout)
+    Layout()
+    ShowControls()
+    GetFFD(control).moved = true
+    return buttons
+end
+
 local function ModelBackdrop(frame, topBar)
-    local scene = _G.CharacterModelScene
     local doll = _G.PaperDollFrame
-    if not (scene and doll) or GetFFD(frame).modelBg then return end
-    -- Under the paper doll so it comes and goes with that tab; one level
-    -- under the scene so the character renders over it.
-    local host = CreateFrame("Frame", nil, doll)
-    PinTop(host, topBar, scene)
-    host:SetPoint("LEFT", scene, "LEFT", 0, 0)
-    host:SetPoint("RIGHT", scene, "RIGHT", 0, 0)
-    host:SetPoint("BOTTOM", scene, "BOTTOM", 0, 0)
-    host:SetFrameLevel(math.max(0, scene:GetFrameLevel() - 1))
+    if not (doll and frame.LeftPaneHost) then return end
+    -- Stay at the shell's level below the outer border and the model scene.
+    local host = CreateFrame("Frame", nil, frame)
+    host:SetFrameLevel(frame:GetFrameLevel())
+    PinTop(host, topBar, frame.LeftPaneHost)
+    host:SetPoint("LEFT", frame, "LEFT", 0, 0)
+    host:SetPoint("RIGHT", frame.LeftPaneHost, "RIGHT", 0, 0)
+    host:SetPoint("BOTTOM", frame, "BOTTOM", 0, 0)
+    doll:HookScript("OnShow", function() host:Show() end)
+    doll:HookScript("OnHide", function() host:Hide() end)
+    host:SetShown(doll:IsShown())
     local tex = host:CreateTexture(nil, "BACKGROUND")
     tex:SetAllPoints(host)
     tex:SetTexture(MEDIA .. "character-bg.png")
     host:SetScript("OnSizeChanged", function(_, w, h) CoverCrop(tex, w, h) end)
     CoverCrop(tex, host:GetSize())
-    GetFFD(frame).modelBg = host
+    return tex
 end
 
 local function SidebarPanel(frame, topBar)
     local host = frame.RightPaneHost
-    if not host or GetFFD(frame).sidebar then return end
+    if not host then return end
     -- A child of the pane host so it collapses with it, at the host's own
     -- level so every list and scrollbar draws over it.
     local panel = CreateFrame("Frame", nil, host)
     panel:SetFrameLevel(host:GetFrameLevel())
     PinTop(panel, topBar, host)
     panel:SetPoint("LEFT", host, "LEFT", 0, 0)
-    panel:SetPoint("RIGHT", host, "RIGHT", -6, 0)
-    panel:SetPoint("BOTTOM", host, "BOTTOM", 0, 8)
+    panel:SetPoint("RIGHT", frame, "RIGHT", 0, 0)
+    panel:SetPoint("BOTTOM", frame, "BOTTOM", 0, 0)
     local tex = panel:CreateTexture(nil, "BACKGROUND")
     tex:SetAllPoints(panel)
     tex:SetColorTexture(0, 0, 0, 0.2)
-    GetFFD(frame).sidebar = panel
+    return tex
+end
+
+local STRATA_ORDER = {
+    BACKGROUND = 1, LOW = 2, MEDIUM = 3, HIGH = 4, DIALOG = 5,
+    FULLSCREEN = 6, FULLSCREEN_DIALOG = 7, TOOLTIP = 8,
+}
+
+local function BuildModeTabEffects(tab, WSkin, icon, mask, squareMask)
+    local border = CreateFrame("Frame", nil, tab)
+    border:SetAllPoints(icon)
+    WSkin.RegisterWindowIconBorder(border, nil, nil, 2 + 8) -- top right and bottom right
+
+    local effect = tab:CreateTexture(nil, "OVERLAY")
+    effect:SetAllPoints(icon)
+    effect:SetBlendMode("ADD")
+    effect:SetVertexColor(GLOW_GOLD.r, GLOW_GOLD.g, GLOW_GOLD.b)
+    effect:AddMaskTexture(mask)
+    effect:Hide()
+    WSkin.RegisterWindowIcon(icon, border, nil, effect, mask, squareMask)
+
+    local enabled, configured, hovered, current, goldBorder
+    local function Paint()
+        local selected = tab.SelectedTexture:IsShown()
+        local gold = configured and selected or nil
+        if goldBorder ~= gold then
+            goldBorder = gold
+            WSkin.SetWindowBorderTint(border, gold and GLOW_GOLD or nil)
+        end
+        local art
+        if enabled then
+            if selected then
+                art = "highlight-3.png"
+            elseif hovered then
+                art = "highlight-2.png"
+            end
+        end
+        if art == current then return end
+        current = art
+        if art then effect:SetTexture(ACTION_BAR_MEDIA .. art) end
+        effect:SetShown(art ~= nil)
+    end
+    tab:HookScript("OnEnter", function()
+        hovered = true
+        Paint()
+    end)
+    local function ClearHover()
+        hovered = false
+        Paint()
+    end
+    tab:HookScript("OnLeave", ClearHover)
+    tab:HookScript("OnHide", ClearHover)
+    hooksecurefunc(tab, "SetChecked", Paint)
+    return function(on, hasConfiguredBorder)
+        enabled, configured = on, hasConfiguredBorder
+        Paint()
+    end
+end
+
+local function ModeTabArtwork(frame, tab, WSkin)
+    local native, mask = tab.Icon, tab.Mask
+    local portrait = tab == frame.ModeTabs.CharacterTab
+    local function CropNative()
+        native:RemoveMaskTexture(mask)
+        WSkin.SetIconCrop(native, 0.075)
+        native:AddMaskTexture(mask)
+    end
+    if not portrait then CropNative() end
+
+    local icon = tab:CreateTexture(nil, "ARTWORK", nil, 1)
+    local useNative
+    local function PaintPortrait()
+        if useNative then
+            CropNative()
+        else
+            SetPortraitTexture(icon, "player", true)
+            WSkin.SetIconCrop(icon, 0.045)
+        end
+    end
+    local function SetStyle(house, configured)
+        -- Extend the artwork and its mask into the clipped edge only.
+        local extension = configured and 2 * OnePixel(tab) or 0
+        icon:SetPoint("TOPLEFT", native, "TOPLEFT", -extension, 0)
+        icon:SetPoint("BOTTOMRIGHT", native, "BOTTOMRIGHT", 0, 0)
+        useNative = house or (not portrait and not configured)
+        native:SetAlpha(useNative and 1 or 0)
+        icon:SetShown(not useNative)
+        if portrait then PaintPortrait() end
+    end
+    if not portrait then
+        icon:SetTexture(tab.iconTexture or native:GetTexture())
+        WSkin.SetIconCrop(icon, 0.075)
+    end
+    local style = EllesmereUIDB and EllesmereUIDB.blizzWinBorderTexture
+    SetStyle(not style, WSkin.IsModeTabBorderStyle(style))
+    if not portrait then
+        icon:AddMaskTexture(mask)
+        return icon, mask, nil, SetStyle
+    end
+    hooksecurefunc(frame, "UpdateCharacterModeTabPortrait", PaintPortrait)
+    local square = tab:CreateMaskTexture()
+    square:SetBlockingLoadsRequested(true)
+    square:SetTexture(EllesmereUI.SHAPE_MASKS.square, "CLAMPTOBLACKADDITIVE", "CLAMPTOBLACKADDITIVE")
+    -- Fit the portrait to the square opening inside the 128px mask.
+    local insetX, insetY = native:GetWidth() * 10 / 108, native:GetHeight() * 10 / 108
+    square:SetPoint("TOPLEFT", icon, "TOPLEFT", -insetX, insetY)
+    square:SetPoint("BOTTOMRIGHT", icon, "BOTTOMRIGHT", insetX, -insetY)
+    icon:AddMaskTexture(square)
+    return icon, square, square, SetStyle
+end
+
+local function BuildModeTabSkin(frame, WSkin)
+    local host = frame.ModeTabs
+    local tabs = host and host.Tabs
+    if not (tabs and frame.UpdateTabLayout) or host:IsProtected() then return end
+    for _, tab in ipairs(tabs) do
+        if tab:IsProtected() then return end
+    end
+
+    -- Clip the whole column, including border and glow artwork outside a tab.
+    local clip = CreateFrame("Frame", nil, frame)
+    clip:SetPoint("TOPLEFT", frame, "TOPRIGHT")
+    clip:SetPoint("BOTTOMLEFT", frame, "BOTTOMRIGHT", 0, -32)
+    clip:SetWidth(host:GetWidth() + 32)
+    clip:SetClipsChildren(true)
+    local _, _, _, x, y = host:GetPoint()
+    host:SetParent(clip)
+    host:ClearAllPoints()
+    host:SetPoint("TOPLEFT", clip, "TOPLEFT", x or 0, y or -30)
+
+    local scale, overlap, maskExtension = 0.9, 2, 2
+    local effects, artwork = {}, {}
+    for _, tab in ipairs(tabs) do
+        tab:SetScale(tab:GetScale() * scale)
+        local mask = tab.Mask
+        if mask and tab.Icon then
+            local x = maskExtension / tab:GetScale()
+            mask:SetWidth(mask:GetWidth() + x)
+            mask:SetPoint("CENTER", tab, "CENTER", -x / 2, 0)
+            local icon, nativeMask, squareMask, setStyle = ModeTabArtwork(frame, tab, WSkin)
+            artwork[tab] = setStyle
+            effects[tab] = BuildModeTabEffects(tab, WSkin, icon, nativeMask, squareMask)
+        end
+    end
+    local function Layout()
+        local row, step = 0, nil
+        for _, tab in ipairs(tabs) do
+            if tab:IsShown() then
+                local pixel = OnePixel(tab)
+                -- Anchor every row to the same origin on the same pixel phase.
+                if not step then
+                    local previousStep = (tab:GetHeight() - overlap / tab:GetScale()) / pixel - 1
+                    step = math.floor(previousStep + 0.5) + 4
+                end
+                tab:ClearAllPoints()
+                tab:SetPoint("TOPLEFT", host, "TOPLEFT", 0, -row * step * pixel)
+                row = row + 1
+            end
+        end
+    end
+    hooksecurefunc(frame, "UpdateTabLayout", Layout)
+    clip:SetScript("OnShow", function()
+        Layout()
+        EllesmereUI.RegisterPxReapply(clip, Layout)
+    end)
+    clip:SetScript("OnHide", function() EllesmereUI.RegisterPxReapply(clip, nil) end)
+    if clip:IsVisible() then EllesmereUI.RegisterPxReapply(clip, Layout) end
+
+    frame:UpdateTabLayout()
+
+    local previousHouse, previousConfigured
+    return function(style)
+        local house = not style
+        local configured = WSkin.IsModeTabBorderStyle(style)
+        if previousHouse == house and previousConfigured == configured then return end
+        previousHouse, previousConfigured = house, configured
+        for _, tab in ipairs(tabs) do
+            local setStyle = artwork[tab]
+            if setStyle then setStyle(house, configured) end
+            WSkin.SideTab(tab, house)
+            tab.Background:SetAlpha((house or configured) and 0 or 1)
+            tab.TabGlow:SetVertexColor(1, 1, 1, 0)
+            tab.SelectedTexture:SetVertexColor(GLOW_GOLD.r, GLOW_GOLD.g, GLOW_GOLD.b, configured and 0 or 1)
+            tab.HighlightTexture:SetAlpha(house and 1 or 0)
+            local paint = effects[tab]
+            if paint then paint(not house, configured) end
+        end
+    end, clip
+end
+
+local function TopLayer(strata, level, owner)
+    local layer = owner:GetFrameStrata()
+    if (STRATA_ORDER[layer] or 0) > (STRATA_ORDER[strata] or 0) then strata = layer end
+    return strata, math.max(level, owner:GetFrameLevel())
+end
+
+local function BorderLayer(border)
+    local strata, level = border:GetFrameStrata(), border:GetFrameLevel()
+    local strips = EllesmereUI.PP.GetBorders(border)
+    if strips and strips:IsShown() then strata, level = TopLayer(strata, level, strips) end
+    local backdrop = EllesmereUI._bdBorderData[border]
+    if backdrop and backdrop:IsShown() then strata, level = TopLayer(strata, level, backdrop) end
+    return strata, level
+end
+
+local function PaintHorizontalCompanion(line, style, thickness, pixel)
+    local pixels = EllesmereUI._pixelArtBorders[style]
+    local wrap = pixels and "CLAMPTOBLACKADDITIVE" or nil
+    line:SetTexture(EllesmereUI.GetBorderCompanion(style, "sepH"), wrap, wrap, pixels and "NEAREST" or nil)
+    local phase = 0
+    if pixels then
+        -- Seat the bright texel on a pixel center rather than its shaded neighbor.
+        local height = math.max(1, math.floor(thickness / pixel + 0.5))
+        local stroke = 26.5 / 32
+        phase = (math.floor(stroke * height) + 0.5) / height - stroke
+        line:SetSnapToPixelGrid(true)
+        line:SetTexelSnappingBias(0)
+    end
+    line:SetTexCoord(0, 1, 1 + phase, phase)
+end
+
+local function BuildDividers(frame, topBar, modelBg, sidebarBg)
+    local right = frame.RightPaneHost
+    if not (right and topBar) then return end
+    local PP = EllesmereUI.PP
+    local header = CreateFrame("Frame", nil, frame)
+    header:SetAllPoints(frame)
+    local seam = CreateFrame("Frame", nil, right)
+    local horizontal = header:CreateTexture(nil, "OVERLAY")
+    local vertical = seam:CreateTexture(nil, "OVERLAY")
+    local backgrounds = { modelBg, sidebarBg }
+    local skinModeTabs, tabClip = BuildModeTabSkin(frame, ns.WSkin)
+
+    local border, style, size, key, color, px, dock
+    local dockSeam, dockLine
+    local function Paint()
+        if not border then return end
+        local es = frame:GetEffectiveScale()
+        local db = EllesmereUIDB
+        local pixelArt = EllesmereUI._pixelArtBorders[style]
+        local geometryStyle = pixelArt and "pixels" or style
+        local filter = pixelArt and "NEAREST" or nil
+        local strata, level = BorderLayer(border)
+        if tabClip then
+            local edge = 0
+            if style then
+                local _, reach = EllesmereUI.BorderReach(size, geometryStyle,
+                    db.blizzWinBorderOffsetX, db.blizzWinBorderOffsetY,
+                    db.blizzWinBorderShiftX, db.blizzWinBorderShiftY, "blizzardSkin", key, px, nil, 1, es)
+                local overlap = (style == "glow" or pixelArt) and OnePixel(frame) or 0
+                edge = math.max(0, (reach or 0) - overlap)
+            end
+            tabClip:SetPoint("TOPLEFT", dock or frame, "TOPRIGHT", edge, 0)
+            tabClip:SetPoint("BOTTOMLEFT", dock or frame, "BOTTOMRIGHT", edge, -32)
+            if pixelArt then
+                tabClip:SetFrameStrata(strata)
+                tabClip:SetFrameLevel(level + 4)
+            else
+                tabClip:SetFrameStrata(frame:GetFrameStrata())
+                tabClip:SetFrameLevel(frame:GetFrameLevel() + 1)
+            end
+        end
+        for _, bg in pairs(backgrounds) do
+            strata, level = TopLayer(strata, level, bg:GetParent())
+        end
+        if dock then strata, level = TopLayer(strata, level, dock) end
+        header:SetFrameStrata(strata)
+        seam:SetFrameStrata(strata)
+        header:SetFrameLevel(level + (dock and 4 or 2))
+        seam:SetFrameLevel(level + (dock and 5 or 3))
+        if size == 0 then
+            horizontal:Hide()
+            vertical:Hide()
+            if dockSeam then dockSeam:Hide() end
+            return
+        end
+
+        local thick = EllesmereUI.BorderCompanionThickness(geometryStyle, size, px, es)
+        local art = thick and thick > 0
+        local solid = style == "solid" and PP.GetBorders(border)
+        local pixel = OnePixel(frame)
+        local left, rightInset, top, bottom, dockBottom = 0, 0, 0, 0, 0
+        local lead, join
+        if art then
+            local edge, ox, oy, sx, sy = EllesmereUI.BorderPlacement(size, geometryStyle,
+                db.blizzWinBorderOffsetX, db.blizzWinBorderOffsetY,
+                db.blizzWinBorderShiftX, db.blizzWinBorderShiftY, "blizzardSkin", key, px, nil, es)
+            -- Inner edge of the opaque stroke in the 28 sampled texels.
+            local ink = edge * 16 / 28
+            -- Round towards the border at the left and bottom joins so the
+            -- antialiased inner texel meets the separator on the pixel grid.
+            left = math.floor((ink - ox + sx) / pixel) * pixel
+            rightInset = PP.SnapForES(ink - ox - sx, es)
+            top = math.ceil((ink - oy - sy) / pixel) * pixel
+            bottom = math.floor((ink - oy + sy) / pixel) * pixel
+            dockBottom = math.ceil((ink - oy + sy) / pixel) * pixel
+            lead = PP.SnapForES(thick * 6 / 32, es)
+            join = PP.SnapForES(thick * 4 / 32, es)
+            PaintHorizontalCompanion(horizontal, style, thick, pixel)
+        else
+            thick = pixel * (style == "solid" and (px or size) or 1)
+            if not style then left, rightInset, top, bottom, dockBottom = pixel, pixel, pixel, pixel, pixel end
+            lead, join = PP.SnapForES(thick / 2, es), 0
+            horizontal:SetColorTexture(1, 1, 1, 1)
+            horizontal:SetTexCoord(0, 1, 0, 1)
+        end
+        horizontal:SetSnapToPixelGrid(not solid)
+        vertical:SetSnapToPixelGrid(not solid)
+        if pixelArt then
+            vertical:SetTexelSnappingBias(0)
+        end
+        horizontal:ClearAllPoints()
+        if solid then
+            horizontal:SetPoint("LEFT", solid._left, "RIGHT", -pixel, 0)
+            if dock then
+                horizontal:SetPoint("RIGHT", topBar, "RIGHT")
+            else
+                horizontal:SetPoint("RIGHT", solid._right, "LEFT", pixel, 0)
+            end
+            horizontal:SetPoint("BOTTOM", topBar, "BOTTOM", 0, -lead)
+        else
+            horizontal:SetPoint("BOTTOMLEFT", topBar, "BOTTOMLEFT", left - pixel, -lead)
+            horizontal:SetPoint("BOTTOMRIGHT", topBar, "BOTTOMRIGHT", dock and 0 or pixel - rightInset, -lead)
+        end
+        horizontal:SetHeight(thick)
+        horizontal:Show()
+
+        seam:ClearAllPoints()
+        seam:SetPoint("TOP", horizontal, "BOTTOM", 0, join)
+        seam:SetPoint("LEFT", right, "LEFT", 0, 0)
+        if solid then
+            seam:SetPoint("BOTTOM", solid._bottom, "TOP", 0, -pixel)
+        else
+            seam:SetPoint("BOTTOM", frame, "BOTTOM", 0, bottom - pixel)
+        end
+        seam:SetWidth(thick)
+        if art then
+            EllesmereUI.PlaceBorderDividerV(vertical, seam, true, true, style, size, px, es, filter)
+        else
+            vertical:SetColorTexture(1, 1, 1, 1)
+            vertical:SetTexCoord(0, 1, 0, 1)
+            vertical:ClearAllPoints()
+            vertical:SetPoint("TOP", seam, "TOPLEFT", 0, 0)
+            vertical:SetPoint("BOTTOM", seam, "BOTTOMLEFT", 0, 0)
+            vertical:SetWidth(thick)
+            vertical:Show()
+        end
+        local r, g, b = 0.25, 0.25, 0.25
+        if color then r, g, b = color.r, color.g, color.b end
+        horizontal:SetVertexColor(r, g, b, 1)
+        vertical:SetVertexColor(r, g, b, 1)
+        if dock then
+            if not dockSeam then
+                dockSeam = CreateFrame("Frame", nil, frame)
+                dockLine = dockSeam:CreateTexture(nil, "OVERLAY")
+            end
+            dockSeam:SetFrameStrata(strata)
+            dockSeam:SetFrameLevel(level + 3)
+            dockSeam:SetWidth(thick)
+            dockSeam:ClearAllPoints()
+            local offset = 0
+            if pixelArt then
+                -- The mirrored companion's inner stroke begins six texels from its lead.
+                local stroke = PP.SnapForES(thick * 6 / 32, es)
+                local overhang = PP.SnapForES(thick * 2 / EllesmereUI.GetBorderCompanion(style, "sepSize"), es)
+                offset = stroke - overhang
+            end
+            dockSeam:SetPoint("LEFT", frame, "RIGHT", offset, 0)
+            if solid then
+                dockSeam:SetPoint("TOP", solid._top, "BOTTOM")
+                dockSeam:SetPoint("BOTTOM", solid._bottom, "TOP")
+            else
+                local extension = pixelArt and 2 * pixel or 0
+                dockSeam:SetPoint("TOP", frame, "TOP", 0, -top + extension)
+                dockSeam:SetPoint("BOTTOM", frame, "BOTTOM", 0, dockBottom - extension)
+            end
+            dockLine:SetSnapToPixelGrid(not solid)
+            if pixelArt then dockLine:SetTexelSnappingBias(0) end
+            if art then
+                EllesmereUI.PlaceBorderDividerV(dockLine, dockSeam, true, true, style, size, px, es, filter)
+            else
+                dockLine:ClearAllPoints()
+                dockLine:SetAllPoints(dockSeam)
+                dockLine:SetColorTexture(1, 1, 1, 1)
+                dockLine:SetTexCoord(0, 1, 0, 1)
+                dockLine:Show()
+            end
+            dockLine:SetVertexColor(r, g, b, 1)
+        end
+        if dockSeam then dockSeam:SetShown(dock ~= nil) end
+    end
+    EllesmereUI.RegisterPxReapply(header, Paint)
+    return function(outer, texture, step, thickness, tint, exact, attachment)
+        border, style, size, key, color, px, dock = outer, texture, step, thickness, tint, exact, attachment
+        if skinModeTabs then skinModeTabs(style) end
+        Paint()
+    end
+end
+
+local function ColorLevelLabel(label)
+    if not label then return end
+    local text, word = label:GetText(), _G.LEVEL
+    if not (text and word and word ~= "") or (issecretvalue and issecretvalue(text)) then return end
+    local first, last = text:find(word, 1, true)
+    if not first then return end
+    local prefix = text:sub(1, first - 1)
+    local openColor = (prefix:match(".*|r(.*)") or prefix):match(".*(|c%x%x%x%x%x%x%x%x)")
+    if openColor == "|cffffffff" then return end
+    label:SetText(prefix .. "|cffffffff" .. word .. "|r" .. (openColor or "") .. text:sub(last + 1))
+end
+
+local function SkinPaperDollHeader(WSkin, modelBg, sidebarBg, fontSize)
+    local firstTab = _G.PaperDollSidebarTab1
+    local tabHost = _G.PaperDollSidebarTabs
+    if not (firstTab and tabHost) then return end
+    local hostTop, tabTop = 4, -5
+    if sidebarBg and not tabHost:IsProtected() then
+        tabHost:ClearAllPoints()
+        tabHost:SetPoint("TOP", sidebarBg, "TOP", 0, hostTop)
+    end
+    local rowY = hostTop + tabTop - firstTab:GetHeight() / 2
+    for _, level in pairs({ _G.CharacterLevelText, _G.PetCharacterLevelText }) do
+        WSkin.Font(level, nil, nil, nil, fontSize)
+        ColorLevelLabel(level)
+        if modelBg then
+            level:ClearAllPoints()
+            level:SetPoint("CENTER", modelBg, "TOP", 0, rowY)
+        end
+    end
+    hooksecurefunc("PaperDollFrame_SetLevel", function() ColorLevelLabel(_G.CharacterLevelText) end)
+    hooksecurefunc("PaperDollFrame_SetPetLevel", function() ColorLevelLabel(_G.PetCharacterLevelText) end)
+    local names = { EllesmereUI.L("Character"), EllesmereUI.L("Equipment"), EllesmereUI.L("Titles"), EllesmereUI.L("Pet") }
+    local tabs = {}
+    local gap = 10
+    local function Paint(entry)
+        local tab, label, underline = entry.tab, entry.label, entry.underline
+        local accent = EllesmereUI.ELLESMERE_GREEN
+        local selected = tab:IsEnabled() and tab:GetChecked() and accent ~= nil
+        underline:SetShown(selected == true)
+        if not tab:IsEnabled() then
+            label:SetTextColor(1, 1, 1, 0.28)
+        elseif selected then
+            label:SetTextColor(accent.r, accent.g, accent.b, 1)
+            underline:SetColorTexture(accent.r, accent.g, accent.b, 1)
+        else
+            label:SetTextColor(1, 1, 1, tab:IsMouseOver() and 1 or 0.6)
+        end
+    end
+    local function Sync()
+        for _, entry in ipairs(tabs) do Paint(entry) end
+    end
+    local function Layout()
+        local total, count = 0, 0
+        for _, entry in ipairs(tabs) do
+            if entry.tab:IsShown() then
+                if entry.tab:IsProtected() then return end
+                total = total + entry.width
+                count = count + 1
+            end
+        end
+        if total == 0 then return end
+        local ratio = math.min(1, math.max(1, tabHost:GetWidth() - count * gap) / total)
+        local x = -(total * ratio + count * gap) / 2
+        for _, entry in ipairs(tabs) do
+            local tab = entry.tab
+            if tab:IsShown() then
+                local w = entry.width * ratio + gap
+                tab:SetWidth(w)
+                tab:ClearAllPoints()
+                tab:SetPoint("TOPLEFT", tabHost, "TOP", x, tabTop)
+                x = x + w
+            end
+        end
+    end
+    for i, name in ipairs(names) do
+        local tab = _G["PaperDollSidebarTab" .. i]
+        if tab then
+            WSkin.FadeRegions(tab)
+            local label = tab:CreateFontString(nil, "OVERLAY")
+            WSkin.Font(label, nil, nil, nil, fontSize)
+            label:SetWordWrap(false)
+            label:SetText(name)
+            local width = math.max(1, label:GetStringWidth())
+            label:SetPoint("LEFT", tab, "LEFT", gap / 2, 0)
+            label:SetPoint("RIGHT", tab, "RIGHT", -gap / 2, 0)
+            label:SetJustifyH("CENTER")
+            local underline = tab:CreateTexture(nil, "OVERLAY")
+            underline:SetSize(width, OnePixel(tab))
+            underline:SetPoint("TOP", label, "BOTTOM", 0, -2)
+            local entry = { tab = tab, label = label, width = width, underline = underline }
+            tabs[#tabs + 1] = entry
+            local function Repaint() Paint(entry) end
+            tab:HookScript("OnEnter", Repaint)
+            tab:HookScript("OnLeave", Repaint)
+            tab:HookScript("OnEnable", Repaint)
+            tab:HookScript("OnDisable", Repaint)
+        end
+    end
+    hooksecurefunc("PaperDollFrame_UpdateSidebarTabLayout", Layout)
+    hooksecurefunc("PaperDollFrame_UpdateSidebarTabs", Sync)
+    EllesmereUI.RegAccent({ type = "callback", fn = Sync })
+    Layout()
+    Sync()
+end
+
+local LIST_INSET, LIST_Y = 20, -8
+
+local function SkinSheetScroll(box, WSkin, nativeArt, fadeContent)
+    local scroll = box and box.ScrollBox
+    local bar = box and box.ScrollBar
+    if not (scroll and bar) then return end
+    if not nativeArt then WSkin.ScrollBar(bar) end
+    local track = bar.Track
+    local thumb = track and track.Thumb
+    local bg, fill
+    if track then
+        if nativeArt then nativeArt(track) end
+        bg = track:CreateTexture(nil, "BACKGROUND")
+        bg:SetPoint("TOP", track)
+        bg:SetPoint("BOTTOM", track)
+        bg:SetWidth(5)
+        bg:SetColorTexture(1, 1, 1, 0.12)
+        EllesmereUI.RoundBody(track, bg, 2)
+        if thumb then
+            if nativeArt then
+                nativeArt(thumb)
+                fill = thumb:CreateTexture(nil, "ARTWORK")
+                fill:SetPoint("TOP", thumb)
+                fill:SetPoint("BOTTOM", thumb)
+            else
+                fill = WSkin.GetFFD(thumb).bg
+            end
+            if fill then
+                fill:SetWidth(4)
+                fill:SetColorTexture(1, 1, 1, 0.45)
+                EllesmereUI.RoundBody(thumb, fill, 2)
+            end
+        end
+    end
+    if nativeArt then
+        nativeArt(bar.Back)
+        nativeArt(bar.Forward)
+    end
+
+    local enabled, stockAlpha = not nativeArt, bar:GetAlpha()
+    local function UpdateHover()
+        if enabled then
+            bar:SetAlpha(box:IsVisible() and box:IsMouseOver() and scroll:HasScrollableExtent() and 1 or 0)
+        end
+    end
+    GetFFD(box).statsHover = UpdateHover
+    box:SetMouseMotionEnabled(true)
+    for _, region in pairs({ box, scroll, bar, track, track and track.Thumb, bar.Back, bar.Forward }) do
+        region:HookScript("OnEnter", UpdateHover)
+        region:HookScript("OnLeave", UpdateHover)
+    end
+    box:HookScript("OnHide", function() if enabled then bar:SetAlpha(0) end end)
+
+    local UpdateFade
+    if not nativeArt or fadeContent then
+        local fade, clear = CreateVector2D(0, 16), CreateVector2D(0, 0)
+        local fading
+        UpdateFade = function()
+            local show = enabled and scroll:HasScrollableExtent() and scroll:GetScrollPercentage() < ScrollBoxConstants.ScrollEnd
+            if fading ~= show then
+                fading = show
+                scroll:SetAlphaGradient(1, show and fade or clear)
+            end
+        end
+        scroll:RegisterCallback(BaseScrollBoxEvents.OnScroll, UpdateFade, box)
+        UpdateFade()
+    end
+    local function UpdateLayout()
+        UpdateHover()
+        if UpdateFade then UpdateFade() end
+    end
+    scroll:RegisterCallback(BaseScrollBoxEvents.OnLayout, UpdateLayout, box)
+    box:HookScript("OnShow", UpdateLayout)
+    UpdateHover()
+    if nativeArt then
+        return function(on)
+            if enabled == on then return end
+            if on then stockAlpha = bar:GetAlpha() end
+            enabled = on
+            if UpdateFade then UpdateFade() end
+            if bg then bg:SetShown(on) end
+            if fill then fill:SetShown(on) end
+            if on then
+                UpdateHover()
+            else
+                bar:SetAlpha(stockAlpha)
+            end
+        end
+    end
+end
+
+local function SkinStatsScroll(box, WSkin)
+    local scroll = box and box.ScrollBox
+    if not (scroll and box.ScrollBar) then return end
+    scroll:SetPoint("TOPLEFT", box, "TOPLEFT", LIST_INSET, LIST_Y)
+    scroll:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -LIST_INSET, 30)
+    SkinSheetScroll(box, WSkin)
+end
+
+local equipmentBorderColor = {}
+local function PaintEquipmentBorder(host, style, WSkin, color)
+    local pp = EllesmereUI.PanelPP or EllesmereUI.PP
+    if style then
+        pp.HideBorder(host)
+        return EllesmereUI._applyBlizzardConfiguredBorder(host, "blizzWin", 1, color, 1, nil,
+            EllesmereUI._pixelArtBorders[style])
+    end
+    EllesmereUI._hideBlizzardConfiguredBorder(host)
+    WSkin.AddBorder(host)
+    local theme = WSkin.Theme
+    equipmentBorderColor.r, equipmentBorderColor.g, equipmentBorderColor.b = theme.brdR, theme.brdG, theme.brdB
+    color = color or equipmentBorderColor
+    pp.SetBorderColor(host, color.r, color.g, color.b, theme.brdA)
+    pp.ShowBorder(host)
+    return pp.GetBorders(host), 1, nil, color, 1, "solid"
+end
+
+local function HookEquipmentFlyout(pane, WSkin)
+    local flyout = _G.EquipmentFlyoutFrame
+    if not (flyout and flyout.buttonFrame and _G.EquipmentFlyout_UpdateItems) then return end
+    local anchor = flyout.buttonFrame
+    local arrows, sources, tiles, hidden, arrowAlpha, qualities = {}, {}, {}, {}, {}, {}
+    local stockPoint = {}
+    local enabled, stockWidth, stockHeight, arrowsShown, Refresh
+    local modifierGlow, modifierIcon
+
+    local function PositionModifierIcon(icon, source)
+        local direction = source.flyoutDirection or source.popoutButton.flyoutDirection
+        local slotEdge, flyoutEdge, point
+        local vertical = direction == "UP" or direction == "DOWN"
+        if direction == "LEFT" then
+            slotEdge, flyoutEdge, point = source:GetLeft(), anchor:GetRight(), "LEFT"
+        elseif direction == "UP" then
+            slotEdge, flyoutEdge, point = source:GetTop(), anchor:GetBottom(), "TOP"
+        elseif direction == "DOWN" then
+            slotEdge, flyoutEdge, point = source:GetBottom(), anchor:GetTop(), "BOTTOM"
+        else
+            slotEdge, flyoutEdge, point = source:GetRight(), anchor:GetLeft(), "RIGHT"
+        end
+        if slotEdge and flyoutEdge then
+            local scale = anchor:GetEffectiveScale() / source:GetEffectiveScale()
+            local offset = (flyoutEdge * scale - slotEdge) / 2
+            icon:SetPoint("CENTER", source, point, vertical and 0 or offset, vertical and offset or 0)
+        else
+            icon:SetPoint("CENTER", source.popoutButton)
+        end
+    end
+
+    local function SetModifierFeedback(source)
+        local glow, icon
+        if source and not source.popoutButton.flyoutLocked then
+            local data = GetFFD(source)
+            glow = data.altFlyoutGlow
+            local characterTab = _G.PaperDollSidebarTab1
+            if glow and characterTab and characterTab:GetChecked() then
+                icon = data.altFlyoutIcon
+                if not icon then
+                    icon = source:CreateTexture(nil, "OVERLAY", nil, 5)
+                    icon:SetSize(24, 24)
+                    icon:SetTexture(ICONS .. "unlock-center.png")
+                    icon:Hide()
+                    data.altFlyoutIcon = icon
+                end
+            end
+        end
+        if icon then PositionModifierIcon(icon, source) end
+        if modifierIcon ~= icon then
+            if modifierIcon then modifierIcon:Hide() end
+            modifierIcon = icon
+            if icon then
+                local accent = EllesmereUI.ELLESMERE_GREEN
+                icon:SetVertexColor(accent.r, accent.g, accent.b)
+                icon:Show()
+            end
+        end
+        if modifierGlow == glow then return end
+        if modifierGlow then modifierGlow:Hide() end
+        modifierGlow = glow
+        if glow then glow:Show() end
+    end
+
+    for _, name in ipairs(SLOTS) do
+        local slot = _G[name]
+        local button = slot and slot.popoutButton
+        if button and not button:IsProtected() then
+            sources[slot] = true
+            local icon = button:CreateTexture(nil, "OVERLAY")
+            icon:SetSize(12, 12)
+            icon:SetPoint("CENTER")
+            icon:SetTexture(SIDE_ARROW)
+            local direction = slot.flyoutDirection or button.flyoutDirection
+            local x, y = 0, 0
+            if direction == "LEFT" then
+                icon:SetTexCoord(1, 0, 0, 1)
+                x = 2
+            elseif direction == "UP" then
+                icon:SetRotation(math.pi / 2)
+                y = -2
+            elseif direction == "DOWN" then
+                icon:SetRotation(-math.pi / 2)
+                y = 2
+            else
+                x = -2
+            end
+            arrows[button] = { art = icon, point = { button:GetPoint() }, x = x, y = y }
+        end
+    end
+
+    local function HideArrowTextures(...)
+        for i = 1, select("#", ...) do
+            local texture = select(i, ...)
+            if texture then
+                local alpha = texture:GetAlpha()
+                if arrowAlpha[texture] == nil or alpha ~= 0 then arrowAlpha[texture] = alpha end
+                texture:SetAlpha(0)
+            end
+        end
+    end
+
+    local function SkinArrow(button)
+        HideArrowTextures(button:GetNormalTexture(), button:GetPushedTexture(), button:GetHighlightTexture())
+    end
+
+    -- The popout reassigns its atlases on click, hover and lock changes.
+    hooksecurefunc("EquipmentFlyoutPopoutButton_RefreshVisualState", function(button)
+        if arrowsShown and arrows[button] then SkinArrow(button) end
+    end)
+
+    local function HideArt(region)
+        if not region then return end
+        local alpha = region:GetAlpha()
+        if hidden[region] == nil or alpha ~= 0 then hidden[region] = alpha end
+        region:SetAlpha(0)
+    end
+
+    local function PaintTileCorners(button, tile, style)
+        local radius = style and EllesmereUI.RoundedStyleOK(style) and EllesmereUIDB.blizzWinIconCornerRadius or 0
+        local border = tile.border
+        local art = tile.art
+        local st = tile.auraRound
+        if radius > 0 then
+            local count = art:GetNumMaskTextures()
+            if count == 0 and st and st.on then
+                EllesmereUI.RoundAuraCorners(button, tile, art, nil, false, 0)
+            elseif count > 0 and not (count == 1 and st and st.on and art:GetMaskTexture(1) == st.mask) then
+                radius = 0
+            end
+        end
+        if radius > 0 and border and (style == "glow" or style == "shadow") then
+            EllesmereUI.RoundCorners(tile.host, radius, { border = border, style = style, roots = {} })
+            tile.softBorder = true
+        elseif tile.softBorder then
+            EllesmereUI.RoundCorners(tile.host, 0)
+            tile.softBorder = nil
+        end
+        if style ~= "solid" or not border or not EllesmereUI.PP.GetBorders(border) then border = false end
+        st = EllesmereUI.RoundAuraCorners(button, tile, art, nil, border, radius, button:GetSize())
+        if st then
+            EllesmereUI.MaskRoundedIconLayer(st, tile.hover)
+            EllesmereUI.MaskRoundedIconLayer(st, tile.flash)
+        end
+    end
+
+    local function RestoreFlyout(restoreSize)
+        SetModifierFeedback()
+        if not stockWidth then return end
+        for region, alpha in pairs(hidden) do region:SetAlpha(alpha) end
+        wipe(hidden)
+        for button, tile in pairs(tiles) do
+            if tile.points and not button:IsProtected() then
+                PaintTileCorners(button, tile)
+                tile.hover:Hide()
+                tile.flash:Hide()
+                if tile.specialIcon then tile.specialIcon:Hide() end
+                tile.art = tile.icon
+                button:ClearAllPoints()
+                button:SetPoint(unpack(tile.points, 1, 5))
+                button:SetSize(tile.width, tile.height)
+                tile.icon:ClearAllPoints()
+                for _, point in ipairs(tile.iconPoints) do tile.icon:SetPoint(unpack(point, 1, 5)) end
+                tile.icon:SetTexCoord(unpack(tile.coords))
+                if tile.mask then tile.icon:AddMaskTexture(tile.mask) end
+                tile.points, tile.mask = nil, nil
+                tile.host:Hide()
+            end
+        end
+        if restoreSize and not anchor:IsProtected() then
+            anchor:ClearAllPoints()
+            if stockPoint[1] then anchor:SetPoint(unpack(stockPoint, 1, 5)) end
+            anchor:SetSize(stockWidth, stockHeight)
+        end
+        stockWidth, stockHeight = nil, nil
+        wipe(stockPoint)
+    end
+
+    -- Blizzard already resolves quality when it populates the flyout tiles.
+    hooksecurefunc("SetItemButtonQuality", function(button, quality)
+        if sources[flyout.button] and button and button:GetParent() == anchor then qualities[button] = quality end
+    end)
+
+    -- Keep the command artwork stable when Blizzard refreshes a pooled button.
+    local function SetTileArtwork(button, tile, special)
+        local native = tile.icon
+        if special and not tile.specialIcon then
+            local icon = button:CreateTexture(nil, "ARTWORK")
+            icon:SetAllPoints(native)
+            icon:SetBlockingLoadsRequested(true)
+            tile.specialIcon = icon
+        end
+        local art = special and tile.specialIcon or native
+        if art ~= tile.art or (special and special ~= tile.specialTexture) then
+            EllesmereUI.RoundAuraCorners(button, tile, tile.art, nil, false, 0)
+            tile.art = art
+            if special ~= tile.specialTexture and special then
+                art:SetTexture(special)
+                WSkin.SetIconCrop(art, 0.1)
+                tile.specialTexture = special
+            end
+        end
+        if special then
+            HideArt(native)
+            art:Show()
+        elseif tile.specialIcon then
+            tile.specialIcon:Hide()
+            local alpha = hidden[native]
+            if alpha then
+                native:SetAlpha(alpha)
+                hidden[native] = nil
+            end
+        end
+    end
+
+    local function PaintTile(button, style, width, height)
+        local icon = button.icon
+        local tile = tiles[button]
+        if not tile then
+            local host = CreateFrame("Frame", nil, button)
+            host:SetAllPoints()
+            local hover, flash = BuildSlotHover(button, icon)
+            tile = { host = host, icon = icon, art = icon, hover = hover, flash = flash, color = {} }
+            tiles[button] = tile
+        end
+        local mask = button.Mask
+        if not tile.points then
+            tile.points, tile.coords = { button:GetPoint() }, { icon:GetTexCoord() }
+            tile.width, tile.height = button:GetSize()
+            tile.iconPoints = {}
+            for i = 1, icon:GetNumPoints() do tile.iconPoints[i] = { icon:GetPoint(i) } end
+            icon:ClearAllPoints()
+            icon:SetAllPoints(button)
+            if mask and icon:GetNumMaskTextures() == 1 and icon:GetMaskTexture(1) == mask then
+                tile.mask = mask
+                icon:RemoveMaskTexture(mask)
+            end
+        end
+        VisitSlotChrome(button, HideArt)
+        tile.hover:Show()
+        local currentWidth, currentHeight = button:GetSize()
+        if currentWidth ~= width or currentHeight ~= height then button:SetSize(width, height) end
+        tile.host:Show()
+        local r, g, b
+        local special
+        local location = button.location
+        local numericLocation = type(location) == "number" and not (issecretvalue and issecretvalue(location))
+        if numericLocation and location == _G.EQUIPMENTFLYOUT_PLACEINBAGS_LOCATION then
+            special = "Interface\\PaperDollInfoFrame\\UI-GearManager-ItemIntoBag"
+            local accent = EllesmereUI.ELLESMERE_GREEN
+            r, g, b = accent.r, accent.g, accent.b
+        elseif numericLocation and location == _G.EQUIPMENTFLYOUT_IGNORESLOT_LOCATION then
+            special = "Interface\\PaperDollInfoFrame\\UI-GearManager-LeaveItem-Opaque"
+            r, g, b = 1, 0.2, 0.2
+        elseif numericLocation and location == _G.EQUIPMENTFLYOUT_UNIGNORESLOT_LOCATION then
+            special = "Interface\\PaperDollInfoFrame\\UI-GearManager-Undo"
+            r, g, b = 1, 0.9, 0.2
+        elseif button.UpdateTooltip then
+            r, g, b = ItemQualityColor(qualities[button])
+        end
+        SetTileArtwork(button, tile, special)
+        if not special and math.abs(icon:GetTexCoord() - 0.1) > 0.0001 then
+            EllesmereUI.RoundAuraCorners(button, tile, icon, nil, false, 0)
+            WSkin.SetIconCrop(icon, 0.1)
+        end
+        local color = tile.color
+        color.r, color.g, color.b = r, g, b
+        local border, size = PaintEquipmentBorder(tile.host, style, WSkin, r and color)
+        tile.border = size and size > 0 and border or nil
+        PaintTileCorners(button, tile, style)
+    end
+
+    local function PaintFlyout(nativeUpdate)
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverEquipmentFlyout", function() Refresh(enabled) end)
+            return
+        end
+        local source = flyout.button
+        if not (enabled and sources[source] and source:IsVisible()) then
+            RestoreFlyout(not nativeUpdate)
+            return
+        end
+        local style = EllesmereUIDB.blizzWinBorderTexture
+        local buttons = flyout.buttons
+        if not buttons or not buttons[1] or anchor:IsProtected() then return end
+        if nativeUpdate or not stockWidth then
+            stockWidth, stockHeight = anchor:GetSize()
+            stockPoint[1], stockPoint[2], stockPoint[3], stockPoint[4], stockPoint[5] = anchor:GetPoint()
+        end
+        HideArt(flyout.Highlight)
+        HideArt(flyout.NavigationFrame and flyout.NavigationFrame.BottomBackground)
+        for i = 1, anchor.numBGs or 0 do HideArt(anchor["bg" .. i]) end
+
+        local columns = _G.EQUIPMENTFLYOUT_ITEMS_PER_ROW or 5
+        local width, height = source:GetSize()
+        local scale = source:GetEffectiveScale() / anchor:GetEffectiveScale()
+        width, height = width * scale, height * scale
+        local gap, count = 6 * scale, 0 -- The sheet's item-slot spacing.
+        for _, button in ipairs(buttons) do
+            if button:IsShown() then
+                if not button:IsProtected() and button.icon then
+                    PaintTile(button, style, width, height)
+                    button:ClearAllPoints()
+                    button:SetPoint("TOPLEFT", anchor, "TOPLEFT",
+                        (count % columns) * (width + gap), -math.floor(count / columns) * (height + gap))
+                end
+                count = count + 1
+            end
+        end
+        if count > 0 then
+            local rows = math.ceil(count / columns)
+            local across = math.min(count, columns)
+            anchor:SetSize(across * (width + gap) - gap, rows * (height + gap) - gap)
+            local arrow = source.popoutButton or source
+            local direction = source.flyoutDirection or arrow.flyoutDirection
+            anchor:ClearAllPoints()
+            if direction == "UP" or direction == "DOWN" then
+                anchor:SetPoint("LEFT", source, "LEFT")
+                if direction == "UP" then
+                    anchor:SetPoint("BOTTOM", arrow, "TOP", 0, gap)
+                else
+                    anchor:SetPoint("TOP", arrow, "BOTTOM", 0, -gap)
+                end
+            else
+                anchor:SetPoint("TOP", source, "TOP")
+                if direction == "LEFT" then
+                    anchor:SetPoint("RIGHT", arrow, "LEFT", -gap, 0)
+                else
+                    anchor:SetPoint("LEFT", arrow, "RIGHT", gap, 0)
+                end
+            end
+        end
+        SetModifierFeedback(count > 0 and source or nil)
+    end
+    hooksecurefunc("EquipmentFlyout_UpdateItems", function()
+        if flyout:IsShown() then PaintFlyout(true) end
+    end)
+    flyout:HookScript("OnShow", function() PaintFlyout(true) end)
+    hooksecurefunc("PaperDollFrame_UpdateSidebarTabs", function()
+        local source = flyout.button
+        if enabled and flyout:IsShown() and sources[source] then SetModifierFeedback(source) end
+    end)
+    hooksecurefunc(WSkin, "RefreshIconCorners", function()
+        if not (enabled and stockWidth and flyout:IsShown()) or InCombatLockdown() then return end
+        local style = EllesmereUIDB.blizzWinBorderTexture
+        for button, tile in pairs(tiles) do
+            if tile.points and button:IsShown() and not button:IsProtected() then
+                PaintTileCorners(button, tile, style)
+            end
+        end
+    end)
+
+    local function TintArrows()
+        local accent = EllesmereUI.ELLESMERE_GREEN
+        for _, entry in pairs(arrows) do entry.art:SetVertexColor(accent.r, accent.g, accent.b) end
+    end
+    EllesmereUI.RegAccent({ type = "callback", fn = function()
+        if arrowsShown then TintArrows() end
+        if modifierIcon then
+            local accent = EllesmereUI.ELLESMERE_GREEN
+            modifierIcon:SetVertexColor(accent.r, accent.g, accent.b)
+        end
+        if enabled and flyout:IsShown() then PaintFlyout(false) end
+    end })
+
+    Refresh = function(on)
+        enabled = on
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverEquipmentFlyout", function() Refresh(enabled) end)
+            return
+        end
+        local show = on and pane:IsVisible()
+        if arrowsShown ~= show then
+            arrowsShown = show
+            if show then TintArrows() end
+            for button, entry in pairs(arrows) do
+                entry.art:SetShown(show)
+                local point = entry.point
+                if point[1] and not button:IsProtected() then
+                    button:SetPoint(point[1], point[2], point[3],
+                        (point[4] or 0) + (show and entry.x or 0), (point[5] or 0) + (show and entry.y or 0))
+                end
+                if show then SkinArrow(button) end
+            end
+            if not show then
+                for texture, alpha in pairs(arrowAlpha) do texture:SetAlpha(alpha) end
+                wipe(arrowAlpha)
+            end
+        end
+        if flyout:IsShown() then PaintFlyout(false) else RestoreFlyout(true) end
+    end
+    pane:HookScript("OnHide", function() Refresh(enabled) end)
+    flyout:HookScript("OnHide", function()
+        SetModifierFeedback()
+        if not InCombatLockdown() then RestoreFlyout(true) end
+    end)
+    return Refresh
+end
+
+local function SkinPickerDropdown(dropdown, WSkin)
+    WSkin.Dropdown(dropdown)
+    if not dropdown.OnMenuOpened or not dropdown.OnMenuClosed then return end
+    dropdown:SetMenuAnchor(AnchorUtil.CreateAnchor("TOPLEFT", dropdown, "BOTTOMLEFT", 0, 0))
+    local edge = CreateFrame("Frame", nil, dropdown)
+    local theme = WSkin.Theme
+    local fill = WSkin.SolidTex(edge, "BACKGROUND", theme.bgR, theme.bgG, theme.bgB, 1)
+    local dividerHost = CreateFrame("Frame", nil, edge)
+    dividerHost:SetAllPoints(edge)
+    local divider = dividerHost:CreateTexture(nil, "OVERLAY")
+    divider:SetPoint("LEFT", edge)
+    divider:SetPoint("RIGHT", edge)
+    edge:Hide()
+    local pp = EllesmereUI.PanelPP or EllesmereUI.PP
+    local defaultColor = { r = 0.25, g = 0.25, b = 0.25 }
+    local function PaintBorder()
+        local style = EllesmereUIDB.blizzWinBorderTexture
+        local tint = not style and defaultColor or nil
+        if not edge:IsShown() then
+            PaintEquipmentBorder(dropdown, style, WSkin, tint)
+            return
+        end
+        pp.HideBorder(dropdown)
+        EllesmereUI._hideBlizzardConfiguredBorder(dropdown)
+        local border, size, _, color, px, texture = PaintEquipmentBorder(edge, style, WSkin, tint)
+        if not border or size <= 0 then divider:Hide(); return end
+        local strata, level = BorderLayer(border)
+        dividerHost:SetFrameStrata(strata)
+        dividerHost:SetFrameLevel(level + 1)
+        local es = edge:GetEffectiveScale()
+        local thick = EllesmereUI.BorderCompanionThickness(texture, size, px, es)
+        local lead = 0
+        if thick and thick > 0 then
+            PaintHorizontalCompanion(divider, texture, thick, OnePixel(edge))
+            lead = EllesmereUI.PP.SnapForES(thick * 6 / 32, es)
+        else
+            thick = (px or size) * OnePixel(edge)
+            divider:SetColorTexture(1, 1, 1, 1)
+            divider:SetTexCoord(0, 1, 0, 1)
+        end
+        divider:SetPoint("BOTTOM", dropdown, "BOTTOM", 0, -lead)
+        divider:SetHeight(thick)
+        divider:SetVertexColor(color.r, color.g, color.b, 1)
+        divider:Show()
+    end
+    local menu, painted, art, fonts = nil, nil, {}, {}
+    local Refresh = WSkin.Debounce(function()
+        if painted and not painted:IsForbidden() and (not painted:IsShown() or painted:GetOwnerRegion() == dropdown) then
+            for region, alpha in pairs(art) do region:SetAlpha(alpha) end
+            for label, font in pairs(fonts) do label:SetFontObject(font) end
+        end
+        painted = nil
+        wipe(art)
+        wipe(fonts)
+        if not (menu and menu:IsShown() and not menu:IsForbidden() and menu:GetOwnerRegion() == dropdown) then
+            edge:Hide()
+            edge:ClearAllPoints()
+            fill:ClearAllPoints()
+            PaintBorder()
+            return
+        end
+        painted = menu
+        for _, region in ipairs({ menu:GetRegions() }) do
+            if region:IsObjectType("Texture") then
+                art[region] = region:GetAlpha()
+                region:SetAlpha(0)
+            end
+        end
+        EllesmereUI._hideBlizzardConfiguredBorder(menu)
+        for _, child in ipairs({ menu:GetChildren() }) do
+            for _, label in ipairs({ child:GetRegions() }) do
+                if label:IsObjectType("FontString") and label:GetFontObject() then
+                    fonts[label] = label:GetFontObject()
+                    WSkin.FontFamily(label)
+                end
+            end
+        end
+        edge:ClearAllPoints()
+        edge:SetPoint("TOPLEFT", dropdown)
+        edge:SetPoint("BOTTOMRIGHT", menu)
+        edge:SetFrameStrata(menu:GetFrameStrata())
+        edge:SetFrameLevel(menu:GetFrameLevel())
+        fill:SetPoint("TOPLEFT", dropdown, "BOTTOMLEFT")
+        fill:SetPoint("BOTTOMRIGHT", menu)
+        edge:Show()
+        PaintBorder()
+    end)
+    hooksecurefunc(dropdown, "OnMenuOpened", function(_, opened)
+        menu = opened
+        WSkin.GetFFD(opened).embeddedDropdownMenu = true
+        Refresh()
+    end)
+    hooksecurefunc(dropdown, "OnMenuClosed", function(_, closed)
+        WSkin.GetFFD(closed).embeddedDropdownMenu = nil
+        if closed == menu then menu = nil end
+        Refresh()
+    end)
+    PaintBorder()
+    return PaintBorder
+end
+
+local function HookEquipmentSkin(WSkin, sheet)
+    local pane = _G.PaperDollFrame.EquipmentManagerPane
+    if not pane then return end
+    local popup = _G.GearManagerPopupFrame
+    local surfaces, stock, extras, pickerFonts = {}, {}, {}, {}
+    local active, setScroll, paneBuilt, popupBuilt, setFlyout, setPickerScroll, refreshPickerIcons, pickerShell
+    local paintPickerDropdown
+    local Update
+
+    local function SaveArt(region)
+        if region and stock[region] == nil then stock[region] = region:GetAlpha() end
+        if region and active then region:SetAlpha(0) end
+    end
+    local function SaveTextures(owner, keep)
+        if not owner then return end
+        for _, region in ipairs({ owner:GetRegions() }) do
+            if region ~= keep and region:IsObjectType("Texture") then SaveArt(region) end
+        end
+        SaveArt(owner.NineSlice)
+    end
+
+    -- The cards and footer buttons share horizontal pixels, with native heights.
+    local function SnapSides(host, left, right)
+        local pp = EllesmereUI.PP
+        local scale = host:GetEffectiveScale()
+        local leftEdge, rightEdge = left:GetLeft(), right:GetRight()
+        leftEdge = leftEdge and leftEdge * left:GetEffectiveScale() / scale
+        rightEdge = rightEdge and rightEdge * right:GetEffectiveScale() / scale
+        host:SetPoint("LEFT", left, "LEFT", leftEdge and pp.SnapForES(leftEdge, scale) - leftEdge or 0, 0)
+        host:SetPoint("RIGHT", right, "RIGHT", rightEdge and pp.SnapForES(rightEdge, scale) - rightEdge or 0, 0)
+    end
+
+    local function PaintButtonBorderState(surface)
+        if not (active and surface.pixelBorder) then return end
+        local color = surface.pixelBorderColor
+        local shade = surface.button:IsEnabled() and 1 or 0.65
+        EllesmereUI.SetBorderStyleColor(surface.pixelBorder, color.r * shade, color.g * shade, color.b * shade, 1)
+    end
+
+    local function Paint(surface)
+        surface.host:SetShown(active)
+        surface.fill:SetShown(active)
+        -- The mask owner must contain both the background and the hover textures.
+        local maskOwner = surface.row or surface.button or surface.host
+        if not active then
+            EllesmereUI.RoundCorners(maskOwner, 0)
+            if surface.icon then EllesmereUI.RoundAuraCorners(maskOwner, surface, surface.icon, nil, false, 0) end
+            return
+        end
+        if surface.row and not surface.row:IsVisible() then
+            surface.pendingPaint = true
+            return
+        end
+        surface.pendingPaint = nil
+        if surface.left then SnapSides(surface.host, surface.left, surface.right) end
+        local db = EllesmereUIDB
+        local style = db.blizzWinBorderTexture
+        local border, size, key, color, px, texture = PaintEquipmentBorder(surface.host, style, WSkin, surface.borderTint)
+        surface.pixelBorder = surface.button and EllesmereUI._pixelArtBorders[style] and border or nil
+        surface.pixelBorderColor = surface.pixelBorder and color or nil
+        PaintButtonBorderState(surface)
+        if not border then return end
+        local radius = style and not surface.square and db.blizzWinCornerRadius or 0
+        EllesmereUI.RoundCorners(maskOwner, radius, {
+            rect = surface.host, border = border, style = texture, roots = {}, textures = surface.body or { surface.fill },
+        })
+        local icon = surface.icon
+        if icon then
+            -- Use the slot icon's full-texture mask; the card keeps its own outline.
+            local iconRadius = EllesmereUI.RoundedStyleOK(style) and radius or 0
+            local width, height = icon:GetSize()
+            if iconRadius == 0 or (width and height and width > 0 and height > 0) then
+                EllesmereUI.RoundAuraCorners(maskOwner, surface, icon, nil, false, iconRadius, width, height, 1 + 4)
+            else
+                surface.pendingPaint = true
+            end
+        end
+        local separator = surface.separator
+        if not separator then return end
+        local sep, anchor = separator.texture, separator.anchor
+        local backdrop = EllesmereUI._bdBorderData[border]
+        local layer = backdrop and backdrop:IsShown() and backdrop or border
+        anchor:SetFrameStrata(layer:GetFrameStrata())
+        anchor:SetFrameLevel(math.max(border:GetFrameLevel(), layer:GetFrameLevel()) + 1)
+        local es = anchor:GetEffectiveScale()
+        if size <= 0 then
+            sep:Hide()
+        elseif texture == "solid" then
+            sep:ClearAllPoints()
+            sep:SetPoint("TOPLEFT", anchor)
+            sep:SetPoint("BOTTOMLEFT", anchor)
+            sep:SetWidth((px or size) * OnePixel(anchor))
+            sep:SetColorTexture(1, 1, 1, 1)
+            sep:Show()
+        else
+            EllesmereUI.PlaceBorderDividerV(sep, anchor, false, false, texture, size, px, es,
+                EllesmereUI._pixelArtBorders[texture] and "NEAREST" or nil)
+        end
+        sep:SetVertexColor(color.r, color.g, color.b, 1)
+    end
+
+    local function Box(owner, bounds, button)
+        local host = CreateFrame("Frame", nil, owner)
+        host:SetAllPoints(bounds or owner)
+        host:EnableMouse(false)
+        local fill = owner:CreateTexture(nil, "BACKGROUND", nil, -1)
+        fill:SetAllPoints(host)
+        local theme = WSkin.Theme
+        fill:SetColorTexture(theme.bgR, theme.bgG, theme.bgB, theme.bgA)
+        local surface = { host = host, fill = fill }
+        surfaces[#surfaces + 1] = surface
+        if button then
+            surface.button = owner
+            local hover = host:CreateTexture(nil, "ARTWORK")
+            hover:SetAllPoints()
+            hover:SetColorTexture(1, 1, 1, 0.1)
+            surface.body = { fill, hover }
+            hover:Hide()
+            local function ShowHover()
+                hover:SetAlpha(owner:GetButtonState() == "PUSHED" and 0.5 or 1)
+                hover:SetShown(active and owner:IsEnabled() and owner:IsMouseOver())
+            end
+            local function HideHover() hover:Hide() end
+            owner:HookScript("OnEnter", ShowHover)
+            owner:HookScript("OnEnable", function()
+                ShowHover()
+                PaintButtonBorderState(surface)
+            end)
+            owner:HookScript("OnMouseDown", ShowHover)
+            owner:HookScript("OnMouseUp", ShowHover)
+            owner:HookScript("OnLeave", HideHover)
+            owner:HookScript("OnHide", HideHover)
+            owner:HookScript("OnDisable", function()
+                HideHover()
+                PaintButtonBorderState(surface)
+            end)
+        end
+        return surface
+    end
+
+    local function SetButtonFonts(surface, button, label, fontName)
+        local states = { "Normal", "Highlight", "Disabled" }
+        local stockFonts, skinFonts = {}, {}
+        for _, state in ipairs(states) do
+            local original = button["Get" .. state .. "FontObject"](button)
+            if not original then return end
+            stockFonts[state] = original
+        end
+        local _, size = label:GetFont()
+        size = size or 12
+        surface.font = function()
+            local theme = WSkin.Theme
+            local family = active and EllesmereUI.GetFontFamily(theme.fontPath, size, theme.fontFlag, theme.fontShadow)
+            for _, state in ipairs(states) do
+                local font = stockFonts[state]
+                if active then
+                    if not skinFonts[state] then
+                        skinFonts[state] = CreateFont(fontName .. "Ellesmere" .. state .. "Font")
+                    end
+                    font = skinFonts[state]
+                    if family then
+                        font:SetFontObject(family)
+                    else
+                        EllesmereUI.PrimeFontShadow(font, theme.fontShadow)
+                        font:SetFont(theme.fontPath, size, theme.fontFlag or "")
+                    end
+                    if state ~= "Disabled" then
+                        font:SetTextColor(1, 1, 1)
+                    else
+                        font:SetTextColor(stockFonts[state]:GetTextColor())
+                    end
+                end
+                button["Set" .. state .. "FontObject"](button, font)
+            end
+            -- Setters install the fonts for future state changes; refresh today's label too.
+            local state = not button:IsEnabled() and "Disabled" or button:IsMouseOver() and "Highlight" or "Normal"
+            label:SetFontObject((active and skinFonts or stockFonts)[state])
+        end
+        return true
+    end
+
+    local function Font(surface, label, button, tint)
+        if not label then return end
+        if button then
+            local box = popup and popup.BorderBox
+            local fontName
+            if button == pane.EquipSet or button == pane.SaveSet then
+                fontName = button:GetName()
+            elseif box and button == box.OkayButton then
+                fontName = "EUIForeverPickerOkay"
+            elseif box and button == box.CancelButton then
+                fontName = "EUIForeverPickerCancel"
+            end
+            if fontName and SetButtonFonts(surface, button, label, fontName) then return end
+        end
+        local original = label:GetFontObject()
+        local r, g, b, a
+        if tint then r, g, b, a = label:GetTextColor() end
+        local stateFonts = button and button:GetFontString() == label
+        local function NativeFont()
+            if not stateFonts then return end
+            local normal = button:GetNormalFontObject()
+            if not button:IsEnabled() then return button:GetDisabledFontObject() or normal end
+            if button:IsMouseOver() then return button:GetHighlightFontObject() or normal end
+            return normal
+        end
+        local function Apply()
+            if not active then return end
+            local current = label:GetFontObject()
+            if current and not EllesmereUI._fontFamilySet[current] then original = current end
+            local native = NativeFont() or (button and original)
+            WSkin.FontFamily(label)
+            if tint then
+                local color = tint(g)
+                if color then
+                    label:SetTextColor(color.r, color.g, color.b, color.a or 1)
+                else
+                    label:SetTextColor(r, g, b, a)
+                end
+            elseif button and button:IsEnabled() then
+                if button == pane.NewSet then
+                    local accent = EllesmereUI.ELLESMERE_GREEN
+                    label:SetTextColor(accent.r, accent.g, accent.b)
+                else
+                    WSkin.White(label)
+                end
+            elseif native then
+                label:SetTextColor(native:GetTextColor())
+            end
+        end
+        if button then
+            for _, event in ipairs({ "OnEnter", "OnLeave", "OnEnable", "OnDisable", "OnMouseDown", "OnMouseUp" }) do
+                button:HookScript(event, Apply)
+            end
+        end
+        surface.font = function(refreshColor)
+            if tint and refreshColor then
+                r, g, b, a = label:GetTextColor()
+                if not active then return end
+            end
+            if active then
+                Apply()
+            else
+                local native = NativeFont() or (button and original)
+                if native or original then label:SetFontObject(native or original) end
+                if native then label:SetTextColor(native:GetTextColor()) end
+                if tint then label:SetTextColor(r, g, b, a) end
+            end
+        end
+    end
+
+    local function Button(owner, widthAdjustment, verticalOffset, spanEquipButtons)
+        if not owner or owner:IsProtected() then return end
+        SaveTextures(owner)
+        SaveArt(owner.StateTexture)
+        SaveArt(owner:GetNormalTexture())
+        SaveArt(owner:GetPushedTexture())
+        SaveArt(owner:GetDisabledTexture())
+        SaveArt(owner:GetHighlightTexture())
+        local surface = Box(owner, nil, true)
+        local label = owner.Text or owner:GetFontString()
+        if not label then
+            for _, region in ipairs({ owner:GetRegions() }) do
+                if region:IsObjectType("FontString") then
+                    label = region
+                    break
+                end
+            end
+        end
+        Font(surface, label, owner)
+        if widthAdjustment or spanEquipButtons then
+            surface.left, surface.right = owner, owner
+            if spanEquipButtons then surface.left, surface.right = pane.EquipSet, pane.SaveSet end
+            surface.host:ClearAllPoints()
+            surface.host:SetPoint("TOP", owner)
+            surface.host:SetPoint("BOTTOM", owner)
+            local width = owner:GetWidth()
+            local point, relative, relativePoint, x, y = owner:GetPoint()
+            surface.layout = function()
+                if spanEquipButtons then
+                    owner:ClearAllPoints()
+                    if active then
+                        owner:SetPoint("LEFT", pane.EquipSet, "LEFT")
+                        owner:SetPoint("RIGHT", pane.SaveSet, "RIGHT")
+                    else
+                        owner:SetWidth(width)
+                    end
+                else
+                    owner:SetWidth(active and width - widthAdjustment or width)
+                end
+                if verticalOffset and point then
+                    owner:SetPoint(point, relative, relativePoint, x or 0, (y or 0) + (active and verticalOffset or 0))
+                end
+            end
+        end
+        return surface
+    end
+
+    local rows = {}
+    local function PaintSelection(row)
+        local surface = rows[row]
+        if surface then surface.selected:SetShown(active and row.SelectedBar:IsShown()) end
+    end
+    local function DressRow(row)
+        if not active or not row.icon or row:IsProtected() then return end
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverEquipmentSkin", Update)
+            return
+        end
+        local existing = rows[row]
+        if existing then
+            if existing.layout() or existing.pendingPaint then Paint(existing) end
+            return
+        end
+        for _, art in ipairs({ row:GetRegions() }) do
+            local atlas = art.GetAtlas and art:GetAtlas()
+            if atlas == "UI-Character-Info-OutfitCard" or atlas == "UI-Character-Info-OutfitIcon-Frame" then SaveArt(art) end
+        end
+        SaveArt(row.SelectedBar)
+        SaveArt(row.HighlightBar)
+        local nativeIcon = row.icon
+        SaveArt(nativeIcon)
+        local surface = Box(row)
+        surface.row = row
+        surface.host:ClearAllPoints()
+        surface.host:SetPoint("TOP", row, "TOP", 0, -4)
+        surface.host:SetPoint("BOTTOM", row, "BOTTOM", 0, 4)
+        surface.left, surface.right = pane.EquipSet, pane.SaveSet
+        Font(surface, row.text, nil, function(g)
+            -- Keep the native red warning for sets with missing items.
+            if g > 0.5 then return WHITE_FONT_COLOR end
+        end)
+
+        -- The scroll box moves and replaces the native icon when it reuses a row.
+        local icon = row:CreateTexture(nil, "ARTWORK", nil, -1)
+        icon:SetBlockingLoadsRequested(true)
+        icon:SetWidth(36)
+        icon:SetPoint("TOPLEFT", surface.host)
+        icon:SetPoint("BOTTOMLEFT", surface.host)
+        surface.icon = icon
+        local displayedTexture
+        local edit, delete = row.EditButton, row.DeleteButton
+        local editPoint = edit and not edit:IsProtected() and { edit:GetPoint() }
+        local deletePoint = delete and not delete:IsProtected() and { delete:GetPoint() }
+        local actionsSkinned
+        surface.layout = function()
+            icon:SetShown(active)
+            local changed
+            if active then
+                local _, setTexture
+                if row.setID then _, setTexture = C_EquipmentSet.GetEquipmentSetInfo(row.setID) end
+                local texture = setTexture or nativeIcon:GetTexture() or "Interface\\Icons\\INV_Misc_QuestionMark"
+                if texture ~= displayedTexture then
+                    EllesmereUI.RoundAuraCorners(row, surface, icon, nil, false, 0)
+                    icon:SetTexture(texture)
+                    WSkin.SetIconCrop(icon, 0.08)
+                    displayedTexture = texture
+                    changed = true
+                end
+            end
+            if editPoint and editPoint[1] and deletePoint and deletePoint[1] and actionsSkinned ~= active then
+                edit:ClearAllPoints()
+                delete:ClearAllPoints()
+                if active then
+                    local pixel = OnePixel(surface.host)
+                    edit:SetPoint("CENTER", surface.host, "RIGHT", -13 + pixel, 7 + pixel)
+                    delete:SetPoint("CENTER", surface.host, "RIGHT", -13 + pixel, -9 + pixel)
+                else
+                    delete:SetPoint(unpack(deletePoint, 1, 5))
+                    edit:SetPoint(unpack(editPoint, 1, 5))
+                end
+                actionsSkinned = active
+            end
+            return changed
+        end
+        local join = CreateFrame("Frame", nil, surface.host)
+        join:SetPoint("TOP", surface.host)
+        join:SetPoint("BOTTOM", surface.host)
+        join:SetPoint("LEFT", icon, "RIGHT")
+        join:SetWidth(1)
+        surface.separator = { anchor = join, texture = join:CreateTexture(nil, "OVERLAY") }
+        local selected = row:CreateTexture(nil, "BACKGROUND")
+        selected:SetPoint("TOPLEFT", join)
+        selected:SetPoint("BOTTOMRIGHT", surface.host)
+        selected:SetColorTexture(0.27, 0.86, 0.49, 0.13)
+        surface.selected = selected
+        rows[row] = surface
+        local hover = row:CreateTexture(nil, "HIGHLIGHT")
+        hover:SetAllPoints(selected)
+        hover:SetColorTexture(1, 1, 1, 0.08)
+        surface.body = { surface.fill, selected, hover }
+        extras[#extras + 1] = hover
+        local hoverScroll = GetFFD(pane).statsHover
+        if hoverScroll then
+            row:HookScript("OnEnter", hoverScroll)
+            row:HookScript("OnLeave", hoverScroll)
+        end
+        surface.layout()
+        if surface.font then surface.font() end
+        PaintSelection(row)
+        Paint(surface)
+    end
+    local RefreshRows = WSkin.Debounce(function()
+        if active and pane:IsVisible() then pane.ScrollBox:ForEachFrame(DressRow) end
+    end)
+
+    local function BuildPane()
+        paneBuilt = true
+        SaveArt(pane.Border)
+        setScroll = SkinSheetScroll(pane, WSkin, SaveTextures)
+        local bar = pane.ScrollBar
+        SaveArt(bar and bar.Back and bar.Back.Texture)
+        SaveArt(bar and bar.Forward and bar.Forward.Texture)
+        local drop = 3
+        Button(pane.EquipSet, 9, -drop)
+        Button(pane.SaveSet, 9, -drop)
+        local button = pane.NewSet
+        -- The 44px list rows have a 2px gap and 4px insets on each end.
+        local newSet = Button(button, nil, 8 - drop, true)
+        if newSet then
+            local plus = {}
+            for i = 1, 2 do
+                local line = button:CreateTexture(nil, "ARTWORK")
+                line:SetColorTexture(1, 1, 1, 0.85)
+                line:SetPoint("CENTER", button, "LEFT", 20, 0)
+                line:SetSize(i == 1 and 10 or 2, i == 1 and 2 or 10)
+                plus[i] = line
+                extras[#extras + 1] = line
+            end
+            for _, art in ipairs({ pane:GetRegions() }) do
+                if art.GetAtlas and art:GetAtlas() == "UI-Character-Info-ScrollLine" then SaveArt(art) end
+            end
+            local glow = {}
+            local pixel = OnePixel(pane)
+            for i = 1, 2 do
+                local left = pane:CreateTexture(nil, "ARTWORK")
+                local right = pane:CreateTexture(nil, "ARTWORK")
+                left:SetPoint("LEFT", button, "TOPLEFT", 0, 12)
+                left:SetPoint("RIGHT", button, "TOP", 0, 12)
+                right:SetPoint("LEFT", button, "TOP", 0, 12)
+                right:SetPoint("RIGHT", button, "TOPRIGHT", 0, 12)
+                for _, line in ipairs({ left, right }) do
+                    line:SetHeight((i == 1 and 3 or 1) * pixel)
+                    line:SetColorTexture(1, 1, 1, 1)
+                    extras[#extras + 1] = line
+                end
+                glow[i] = { left, right }
+            end
+            local function TintNewSet()
+                local accent = EllesmereUI.ELLESMERE_GREEN
+                for _, line in ipairs(plus) do line:SetVertexColor(accent.r, accent.g, accent.b) end
+                local clear = CreateColor(accent.r, accent.g, accent.b, 0)
+                for i, pair in ipairs(glow) do
+                    local center = CreateColor(accent.r, accent.g, accent.b, i == 1 and 0.10 or 0.60)
+                    pair[1]:SetGradient("HORIZONTAL", clear, center)
+                    pair[2]:SetGradient("HORIZONTAL", center, clear)
+                end
+                if active and newSet.font then newSet.font() end
+            end
+            TintNewSet()
+            EllesmereUI.RegAccent({ type = "callback", fn = TintNewSet })
+        end
+        -- Dress recycled rows after Blizzard finishes laying out the set list.
+        if pane.ScrollBox then pane.ScrollBox:RegisterCallback(BaseScrollBoxEvents.OnLayout, RefreshRows, rows) end
+        hooksecurefunc("PaperDollEquipmentManagerPane_SetButtonSelected", function(row)
+            if active then PaintSelection(row) end
+        end)
+        hooksecurefunc("PaperDollEquipmentManagerPane_InitButton", function(row)
+            local surface = rows[row]
+            if surface and surface.font then surface.font(true) end
+        end)
+    end
+
+    local function BuildPopup()
+        popupBuilt = true
+        local box = popup.BorderBox
+        if not box then return end
+        local okay, cancel = box.OkayButton, box.CancelButton
+        local footerGap = 16
+        if sheet then
+            popup:ClearAllPoints()
+            popup:SetPoint("TOPLEFT", sheet, "TOPRIGHT")
+            popup:SetPoint("BOTTOMLEFT", sheet, "BOTTOMRIGHT")
+        end
+        SaveTextures(popup)
+        WSkin.Shell("charsheet", popup, { noBorder = true, noTopBar = true })
+        pickerShell = WSkin.GetFFD(popup)
+        SaveTextures(box)
+        local edit = box.IconSelectorEditBox
+        local dropdown = box.IconTypeDropdown or box.IconFilterDropdown
+        if edit and not edit:IsProtected() then
+            SaveTextures(edit)
+            local surface = Box(edit)
+            surface.font = function() if active then WSkin.Font(edit) end end
+        end
+        local icons = {}
+        local function DressIcon(button)
+            local icon = button.Icon
+            if not icon or button:IsProtected() then return end
+            local surface = icons[button]
+            if not surface then
+                SaveTextures(button, icon)
+                surface = Box(button, icon)
+                surface.square = true
+                local hover, flash = BuildSlotHover(button, icon)
+                local selected = button:CreateTexture(nil, "OVERLAY")
+                selected:SetAllPoints(icon)
+                selected:SetTexture(ACTION_BAR_MEDIA .. "highlight-3.png")
+                selected:SetBlendMode("ADD")
+                selected:SetVertexColor(GLOW_GOLD.r, GLOW_GOLD.g, GLOW_GOLD.b)
+                local function UpdateSelection()
+                    local on = active and button.SelectedTexture and button.SelectedTexture:IsShown()
+                    selected:SetShown(on or false)
+                    hover:SetShown(active)
+                    hover:SetAlpha(on and 0 or 1)
+                    if not active then flash:Hide() end
+                    local tint = on and GLOW_GOLD or nil
+                    if surface.borderTint ~= tint then
+                        surface.borderTint = tint
+                        if active then Paint(surface) end
+                    end
+                end
+                surface.layout = UpdateSelection
+                if button.UpdateSelectedTexture then hooksecurefunc(button, "UpdateSelectedTexture", UpdateSelection) end
+                icons[button] = surface
+                Paint(surface)
+            end
+            surface.layout()
+            -- Retain the center half of each icon.
+            if math.abs(icon:GetTexCoord() - 0.25) > 0.0001 then WSkin.SetIconCrop(icon, 0.25) end
+        end
+        local area, grid = box.SelectedIconArea, popup.IconSelector
+        local preview = area and area.SelectedIconButton
+        local selectedText = area and area.SelectedIconText
+        local description = selectedText and selectedText.SelectedIconDescription
+        local function PickerLabel(label, tint)
+            if not label then return end
+            local surface = {}
+            Font(surface, label, nil, tint)
+            pickerFonts[#pickerFonts + 1] = surface.font
+            return surface.font
+        end
+        local function MutedText() return EllesmereUI.TEXT_DIM end
+        PickerLabel(box.EditBoxHeaderText, MutedText)
+        PickerLabel(box.IconSelectionText, MutedText)
+        local descriptionFont = PickerLabel(description, MutedText)
+        local headerFont = PickerLabel(selectedText and selectedText.SelectedIconHeader, function()
+            return EllesmereUI.ELLESMERE_GREEN
+        end)
+        if headerFont then
+            EllesmereUI.RegAccent({ type = "callback", fn = function() if active then headerFont() end end })
+        end
+        if grid and grid.ScrollBox and grid.ScrollBar then
+            setPickerScroll = SkinSheetScroll(grid, WSkin, SaveTextures, true)
+            local bar = grid.ScrollBar
+            SaveArt(bar.Back and bar.Back.Texture)
+            SaveArt(bar.Forward and bar.Forward.Texture)
+            local gridInset = 21
+            grid:ClearAllPoints()
+            grid:SetPoint("TOPLEFT", popup, "TOPLEFT", gridInset, -97)
+            grid:SetPoint("RIGHT", popup, "RIGHT", -10, 0)
+            grid:SetPoint("BOTTOM", cancel, "TOP", 0, footerGap)
+            local _, _, padding, _, columnGap = grid:GetPadding()
+            local columns = grid:GetStride()
+            local left = gridInset + padding
+            local right = left + columns * grid:GetButtonWidth() + (columns - 1) * columnGap
+            if edit and not edit:IsProtected() then
+                local _, _, _, _, y = edit:GetPoint()
+                edit:SetPoint("TOPLEFT", box, "TOPLEFT", left, y or 0)
+            end
+            if dropdown and not dropdown:IsProtected() then
+                local _, _, _, _, y = dropdown:GetPoint()
+                dropdown:SetPoint("TOPRIGHT", box, "TOPLEFT", right, y or 0)
+            end
+        end
+        refreshPickerIcons = WSkin.Debounce(function()
+            if not (active and popup:IsVisible()) then return end
+            if descriptionFont and not EllesmereUI._fontFamilySet[description:GetFontObject()] then descriptionFont() end
+            if preview then DressIcon(preview) end
+            if grid and grid.ScrollBox then grid.ScrollBox:ForEachFrame(DressIcon) end
+        end)
+        if grid and grid.ScrollBox then hooksecurefunc(grid.ScrollBox, "Update", refreshPickerIcons) end
+        if preview and preview.SetIconTexture then hooksecurefunc(preview, "SetIconTexture", refreshPickerIcons) end
+
+        if dropdown then paintPickerDropdown = SkinPickerDropdown(dropdown, WSkin) end
+        local dragContent = box.IconDragArea and box.IconDragArea.IconDragAreaContent
+        PickerLabel(dragContent and dragContent.IconDragText)
+        PickerLabel(dropdown and (dropdown.Text or dropdown:GetFontString()))
+        if Button(okay) and Button(cancel) then
+            cancel:ClearAllPoints()
+            cancel:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -footerGap, footerGap)
+            okay:ClearAllPoints()
+            okay:SetPoint("RIGHT", cancel, "LEFT", -12, 0)
+        end
+    end
+
+    Update = function()
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer("ForeverEquipmentSkin", Update)
+            return
+        end
+        local style = EllesmereUIDB and EllesmereUIDB.blizzWinBorderTexture
+        local enabled = not style or WSkin.IsModeTabBorderStyle(style)
+        if not enabled and active == enabled then return end
+        if active ~= enabled then
+            active = enabled
+            for art, alpha in pairs(stock) do art:SetAlpha(active and 0 or alpha) end
+        end
+        if active then
+            if not setFlyout then setFlyout = HookEquipmentFlyout(pane, WSkin) end
+            if not paneBuilt and pane:IsVisible() then BuildPane() end
+            if not popupBuilt and popup and popup:IsVisible() and not popup:IsProtected() then BuildPopup() end
+            if paneBuilt and pane.ScrollBox and pane:IsVisible() then RefreshRows() end
+        end
+        if setScroll then setScroll(active) end
+        if pickerShell then
+            pickerShell.bg:SetShown(active)
+            pickerShell.bgOverlay:SetShown(active)
+            pickerShell.modernBg:SetShown(active)
+        end
+        if setPickerScroll then setPickerScroll(active) end
+        if paintPickerDropdown and active and popup:IsVisible() then paintPickerDropdown() end
+        if refreshPickerIcons and popup:IsVisible() then refreshPickerIcons() end
+        if setFlyout then setFlyout(active) end
+        for _, extra in ipairs(extras) do extra:SetShown(active) end
+        for _, font in ipairs(pickerFonts) do font() end
+        for row in pairs(rows) do PaintSelection(row) end
+        for _, surface in ipairs(surfaces) do
+            if surface.layout then surface.layout() end
+            if surface.font then surface.font() end
+            Paint(surface)
+        end
+    end
+    pane:HookScript("OnShow", Update)
+    if popup then
+        local function OpenPopup()
+            if not popup:IsVisible() then return end
+            Update()
+            if sheet and active and popupBuilt then WSkin.SetWindowBorderDock(sheet, popup) end
+        end
+        popup:HookScript("OnShow", function()
+            if InCombatLockdown() then
+                ns.CombatQueue.Defer("ForeverEquipmentPicker", OpenPopup)
+            else
+                OpenPopup()
+            end
+        end)
+        popup:HookScript("OnHide", function()
+            if sheet and popupBuilt then WSkin.SetWindowBorderDock(sheet) end
+        end)
+    end
+    return Update
 end
 
 --------------------------------------------------------------------------------
@@ -1111,7 +3172,6 @@ end
 --  shown; nothing is built when the client has no average item level.
 --------------------------------------------------------------------------------
 local AVG_H = 24               -- the line's room above the rows
-local LIST_X, LIST_Y = 10, -8  -- Blizzard's own inset of the rows in the list frame
 local avg                      -- { host, text, events, shown }
 
 local function UpdateAverage()
@@ -1125,7 +3185,7 @@ local function UpdateAverage()
         a.host:SetShown(shown)
         -- The rows make room for the line, and take it back with no level to show.
         local box = a.host:GetParent()
-        box.ScrollBox:SetPoint("TOPLEFT", box, "TOPLEFT", LIST_X, shown and (LIST_Y - AVG_H) or LIST_Y)
+        box.ScrollBox:SetPoint("TOPLEFT", box, "TOPLEFT", LIST_INSET, shown and (LIST_Y - AVG_H) or LIST_Y)
     end
 end
 
@@ -1144,8 +3204,8 @@ local function BuildAverage(frame)
     local box = _G.CharacterStatsPaneScrollBox
     if avg or not (box and box.ScrollBox and _G.GetAverageItemLevel) then return end
     local host = CreateFrame("Frame", nil, box)
-    host:SetPoint("TOPLEFT", box, "TOPLEFT", LIST_X, LIST_Y + 2)
-    host:SetPoint("TOPRIGHT", box, "TOPRIGHT", -30, LIST_Y + 2)
+    host:SetPoint("TOPLEFT", box, "TOPLEFT", LIST_INSET, LIST_Y + 2)
+    host:SetPoint("TOPRIGHT", box, "TOPRIGHT", -LIST_INSET, LIST_Y + 2)
     host:SetHeight(AVG_H)
     host:Hide()
     local text = host:CreateFontString(nil, "OVERLAY")
@@ -1155,6 +3215,11 @@ local function BuildAverage(frame)
     host:EnableMouse(true)
     host:SetScript("OnEnter", function(self) EllesmereUI.ShowWidgetTooltip(self, "Equipped Item Level") end)
     host:SetScript("OnLeave", function() EllesmereUI.HideWidgetTooltip() end)
+    local hover = GetFFD(box).statsHover
+    if hover then
+        host:HookScript("OnEnter", hover)
+        host:HookScript("OnLeave", hover)
+    end
     local events = CreateFrame("Frame")
     events:SetScript("OnEvent", UpdateAverage)
     avg = { host = host, text = text, events = events, shown = false }
@@ -1180,25 +3245,28 @@ local function SkinFrame()
     if WSkin.CommonChrome then WSkin.CommonChrome(frame, "CharacterFrame", true) end
     if WSkin.RemovePortrait then WSkin.RemovePortrait(frame) end
 
-    -- The right-pane collapse arrow goes. The pane it toggles is kept open:
-    -- with the arrow gone a sheet collapsed from an earlier session (the
-    -- state is a cvar, read once at load) could never be opened again.
-    Discard(frame.RightPaneToggleButton)
-    if frame.IsRightPaneCollapsed and frame.SetRightPaneCollapsed then
-        frame:HookScript("OnShow", function(self)
-            if self:IsRightPaneCollapsed() then self:SetRightPaneCollapsed(false) end
-        end)
-    end
+    SkinPaneToggle(frame, WSkin)
 
-    -- Name in the top bar and the level lines (the player's and the pet
-    -- view's): the house font on Blizzard's own font strings, so the text
-    -- (pvp title, class color) stays theirs.
-    local title = _G.CharacterFrameTitleText or (frame.TitleContainer and frame.TitleContainer.TitleText)
-    if title and WSkin.Font then WSkin.Font(title, 1, 1, 1) end
-    local level = _G.CharacterLevelText
-    if level and WSkin.Font then WSkin.Font(level) end
-    local petLevel = _G.PetCharacterLevelText
-    if petLevel and WSkin.Font then WSkin.Font(petLevel) end
+    local shell = WSkin.GetFFD and WSkin.GetFFD(frame)
+    local topBar = shell and shell.topBar
+    local title = (frame.TitleContainer and frame.TitleContainer.TitleText) or _G.CharacterFrameTitleText
+    local titleSize = title and select(2, title:GetFont()) or 12
+    if title then
+        WSkin.Font(title, 1, 1, 1, titleSize)
+        local _, class = UnitClass("player")
+        local function UpdateTitle()
+            local isCharacter = frame.activeSubframe == "PaperDollFrame"
+            if topBar then
+                title:ClearAllPoints()
+                title:SetPoint("CENTER", topBar)
+            end
+            if not isCharacter then return end
+            local color = EllesmereUI.GetRawClassColor(class)
+            if color then title:SetTextColor(color.r, color.g, color.b) end
+        end
+        hooksecurefunc(frame, "UpdateTitle", UpdateTitle)
+        UpdateTitle()
+    end
 
     -- Pane backdrops, the stone header, the divider strip, the stats box
     -- chrome (inside frame, scroll line, class crest) and the model backdrop.
@@ -1218,66 +3286,90 @@ local function SkinFrame()
     Fade(_G.PaperDollFrame.TopBackgroundStripHost)
     Fade(_G.CharacterModelScene)
     HideSceneArt(_G.CharacterModelScene)
-    local shell = WSkin.GetFFD and WSkin.GetFFD(frame)
-    local topBar = shell and shell.topBar
-    ModelBackdrop(frame, topBar)
-    SidebarPanel(frame, topBar)
+    local titleInset = 22
+    local close = frame.CloseButton
+    if topBar and close and not close:IsProtected() then
+        close:ClearAllPoints()
+        close:SetPoint("CENTER", topBar, "RIGHT", -titleInset, 0)
+        local glyph = WSkin.GetFFD(close).x
+        if glyph then
+            glyph:ClearAllPoints()
+            glyph:SetPoint("CENTER", close)
+        end
+    end
+    local modelBg, sidebarBg = ModelBackdrop(frame, topBar), SidebarPanel(frame, topBar)
+    local dividers = BuildDividers(frame, topBar, modelBg, sidebarBg)
+    local equipment = HookEquipmentSkin(WSkin, frame)
+    WSkin.SetWindowBorderDetails(frame, modelBg, sidebarBg, function(...)
+        if dividers then dividers(...) end
+        if equipment then equipment() end
+    end, true)
+    EllesmereUI.RegAccent({ type = "callback", fn = function()
+        if EllesmereUIDB and EllesmereUIDB.blizzWinBorderColorMode == "accent" then WSkin.RefreshBorders() end
+    end })
+    SkinPaperDollHeader(WSkin, modelBg, sidebarBg, titleSize - 2)
 
     -- Item slots: frames off, icons cropped, a grey square and a quality
     -- border on each, and the slot text beside them; both follow Blizzard's
     -- own slot refresh.
     for i = 1, #SLOTS do SkinSlot(SLOTS[i], Fade) end
     BuildSlotText()
-    -- Top-left eyeball, as on retail: hides every slot's text for the
-    -- session by fading their shared overlay.
-    if slotOverlay and not d.eyeBtn then
+    -- The eye toggles the shared text overlays and remembers the character's choice.
+    local eyeBtn
+    if slotOverlay then
         local EYE_VISIBLE, EYE_INVISIBLE = EllesmereUI.EYE_VISIBLE_ICON, EllesmereUI.EYE_INVISIBLE_ICON
-        local hidden = false
+        local character = EllesmereUI.CharEntry()
+        local hidden = character and character.foreverItemTextHidden == true
         -- On the slots' own frame: it goes with the slot text (other tabs,
         -- the pet view) and sits above the mouse-enabled model scene, which
         -- reaches up under the button's lower edge.
         local items = slotOverlay:GetParent()
-        local eyeBtn = CreateFrame("Button", nil, items)
-        eyeBtn:SetSize(20, 20)
-        eyeBtn:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -6)
+        eyeBtn = CreateFrame("Button", nil, items)
+        eyeBtn:SetSize(CONTROL_WIDTH, 20)
+        eyeBtn:SetPoint("CENTER", topBar, "LEFT", titleInset, 0)
         eyeBtn:SetFrameLevel(items:GetFrameLevel() + 5)
-        eyeBtn:SetAlpha(0.4)
         local eyeTex = eyeBtn:CreateTexture(nil, "OVERLAY")
-        eyeTex:SetAllPoints()
-        eyeTex:SetTexture(EYE_VISIBLE)
-        eyeBtn:SetScript("OnClick", function(self)
-            hidden = not hidden
+        eyeTex:SetSize(CONTROL_WIDTH, CONTROL_WIDTH)
+        eyeTex:SetPoint("CENTER")
+        local function ApplyEyeState()
             eyeTex:SetTexture(hidden and EYE_INVISIBLE or EYE_VISIBLE)
             slotOverlay:SetAlpha(hidden and 0 or 1)
             ilvlOverlay:SetAlpha(hidden and 0 or 1)
-            EllesmereUI.ShowWidgetTooltip(self, hidden and "Show Item Text" or "Hide Item Text", { width = 135 })
+        end
+        ApplyEyeState()
+        local function ShowEyeTooltip(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:SetText(hidden and "Show Item Text" or "Hide Item Text")
+            GameTooltip:Show()
+        end
+        local function HideEyeTooltip(self)
+            if GameTooltip:IsOwned(self) then GameTooltip:Hide() end
+        end
+        eyeBtn:SetScript("OnClick", function(self)
+            hidden = not hidden
+            local entry = EllesmereUI.CharEntry(true)
+            if entry then entry.foreverItemTextHidden = hidden end
+            ApplyEyeState()
+            if GameTooltip:IsOwned(self) then ShowEyeTooltip(self) end
         end)
-        eyeBtn:SetScript("OnEnter", function(self)
-            self:SetAlpha(0.8)
-            EllesmereUI.ShowWidgetTooltip(self, hidden and "Show Item Text" or "Hide Item Text", { width = 135 })
-        end)
-        eyeBtn:SetScript("OnLeave", function(self)
-            self:SetAlpha(0.4)
-            EllesmereUI.HideWidgetTooltip()
-        end)
-        d.eyeBtn = eyeBtn
+        eyeBtn:SetScript("OnEnter", ShowEyeTooltip)
+        eyeBtn:SetScript("OnLeave", HideEyeTooltip)
+        eyeBtn:SetScript("OnHide", HideEyeTooltip)
+        SkinControlFeedback(eyeBtn, eyeTex)
+    end
+    local scene = _G.CharacterModelScene
+    local cameraButtons = scene and SkinModelControls(scene, eyeBtn, WSkin)
+    if eyeBtn and topBar then
+        -- The native camera layout must never loop over its own anchor (the eye).
+        SkinHeaderHover(frame, topBar, { eyeBtn, unpack(cameraButtons or {}) }, close)
     end
     HookSlotUpdates()
 
-    -- Stats list colors.
+    SkinStatsScroll(_G.CharacterStatsPaneScrollBox, WSkin)
+    SkinStatsScroll(_G.CharacterStatsPanePetScrollBox, WSkin)
     HookStatsList(_G.CharacterStatsPaneScrollBox)
     HookStatsList(_G.CharacterStatsPanePetScrollBox)
     BuildAverage(frame)
-
-    -- The stats scrollbars: the house thin thumb in Blizzard's own track
-    -- position, the up/down arrows left as they are. Texture work only, the
-    -- bar keeps its scripts and its mouse handling.
-    if WSkin.ScrollBar then
-        local stats = _G.CharacterStatsPaneScrollBox
-        if stats and stats.ScrollBar then WSkin.ScrollBar(stats.ScrollBar, true) end
-        local pet = _G.CharacterStatsPanePetScrollBox
-        if pet and pet.ScrollBar then WSkin.ScrollBar(pet.ScrollBar, true) end
-    end
     return true
 end
 
@@ -1321,7 +3413,9 @@ local function UpdateDurability()
         EllesmereUI.ApplyModuleFont(durLabel, nil, 12, "blizzardSkin")
         -- Under the model's zoom/rotate controls.
         local ctrl = scene.ControlFrame
-        if ctrl then
+        if ctrl and GetFFD(ctrl).moved and doll.TopBackgroundStripHost then
+            durLabel:SetPoint("TOP", doll.TopBackgroundStripHost, "TOP", 0, -76)
+        elseif ctrl then
             durLabel:SetPoint("TOP", ctrl, "BOTTOM", 0, -4)
         else
             durLabel:SetPoint("TOP", scene, "TOP", 0, -8)

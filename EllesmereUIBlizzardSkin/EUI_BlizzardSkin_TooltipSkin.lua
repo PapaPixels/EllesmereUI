@@ -54,9 +54,8 @@ local FFD, GetFFD = I.FFD, I.GetFFD
     local function _resolveConfiguredBorder(prefix, legacySize, colorOverride)
         local db = EllesmereUIDB or {}
         local key = db[prefix .. "BorderThickness"]
-        local sizes = { none=0, thin=1, normal=2, heavy=3, strong=4 }
-        local size = key and (sizes[key] or 1) or (legacySize or 1)
-        key = key or ({ [0]="none", [1]="thin", [2]="normal", [3]="heavy", [4]="strong" })[size] or "thin"
+        local size = key and (EllesmereUI.BORDER_STEP_OF_LABEL[key] or 1) or (legacySize or 1)
+        key = key or EllesmereUI.BORDER_LABEL_OF_STEP[size] or "thin"
         local mode = db[prefix .. "BorderColorMode"] or "custom"
         local color
         if colorOverride then
@@ -74,7 +73,7 @@ local FFD, GetFFD = I.FFD, I.GetFFD
         return db, size, key, color, alpha
     end
 
-    local function _applyConfiguredBorder(owner, prefix, legacySize, colorOverride)
+    local function _applyConfiguredBorder(owner, prefix, legacySize, colorOverride, opacityOverride, normalizeScale, pixelSampling)
         if not owner or not EllesmereUI.ApplyBorderStyle then return end
         -- Read the level up front: it is the first widget call this makes, so it doubles as the restriction probe (see _ttUsable).
         local okLvl, ownerLevel = pcall(owner.GetFrameLevel, owner)
@@ -95,11 +94,16 @@ local FFD, GetFFD = I.FFD, I.GetFFD
         local tex = db[prefix .. "BorderTexture"] or "solid"
         -- Exact Border Size (the <prefix>BorderThicknessPx companion); nil = the legacy step above, unchanged.
         local px = EllesmereUI.BorderPx(db[prefix .. "BorderThicknessPx"], size, tex)
-        EllesmereUI.ApplyBorderStyle(data.configBorder, size, color.r, color.g, color.b, alpha,
+        if normalizeScale and size > 0 and not px then px = math.max(1, EllesmereUI.BorderLegacyPx(size, tex)) end
+        -- The textured art already carries its own color. Use the white art for a tint.
+        if prefix == "blizzWin" and tex == "pixels-textured"
+            and (colorOverride or color.r ~= 1 or color.g ~= 1 or color.b ~= 1) then tex = "pixels" end
+        EllesmereUI.SetBorderPixelSampling(data.configBorder, pixelSampling)
+        EllesmereUI.ApplyBorderStyle(data.configBorder, size, color.r, color.g, color.b, opacityOverride or alpha,
             tex, db[prefix .. "BorderOffsetX"],
             db[prefix .. "BorderOffsetY"], db[prefix .. "BorderShiftX"], db[prefix .. "BorderShiftY"],
-            "blizzardSkin", key, nil, px)
-        return data.configBorder
+            "blizzardSkin", key, normalizeScale, px)
+        return data.configBorder, size, key, color, px, tex
     end
     EllesmereUI._applyBlizzardConfiguredBorder = _applyConfiguredBorder
 
@@ -1198,6 +1202,7 @@ local FFD, GetFFD = I.FFD, I.GetFFD
 
     local function _menuSkinFrame(frame)
         if not frame or frame:IsForbidden() or not _pmEnabled() then return end
+        if ns.WSkin and ns.WSkin.IsEmbeddedDropdownMenu and ns.WSkin.IsEmbeddedDropdownMenu(frame) then return end
         for i = 1, _select("#", frame:GetRegions()) do
             local region = _select(i, frame:GetRegions())
             if region and region:IsObjectType("Texture") and not GetFFD(region).owned then
