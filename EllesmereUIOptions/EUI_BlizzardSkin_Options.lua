@@ -2880,7 +2880,7 @@ initFrame:SetScript("OnEvent", function(self)
     -- Inline accent|custom swatch pair on a DualRow region (the standard
     -- dual-swatch treatment): custom sits nearest the control, accent left of
     -- it; the active mode renders bright, the other dimmed.
-    local function AttachLookSwatches(rgn, row, key, disableWithToggle)
+    local function AttachLookSwatches(rgn, row, key, disableWithToggle, unavailable)
         local PP = EllesmereUI.PanelPP
         local ctrl = rgn._control
 
@@ -2938,7 +2938,7 @@ initFrame:SetScript("OnEvent", function(self)
             updateCustom(); updateAccent()
             local c = WSLook(key)
             local useCustom = c and c.useCustom
-            local off = disableWithToggle and c and c.enabled == false
+            local off = (unavailable and unavailable()) or (disableWithToggle and c and c.enabled == false)
             customSwatch:SetAlpha(off and 0.15 or (useCustom and 1 or 0.3))
             accentSwatch:SetAlpha(off and 0.15 or (useCustom and 0.3 or 1))
             customSwatch:EnableMouse(not off)
@@ -4137,7 +4137,7 @@ initFrame:SetScript("OnEvent", function(self)
                       if ns.AdoptForeverLootBorder() then
                           ns.WSkin.RefreshBorders()
                       else
-                          ns.WSkin.RefreshIconCorners()
+                          ns.WSkin.RefreshIconCorners(false)
                       end
                   end },
             },
@@ -4212,6 +4212,8 @@ initFrame:SetScript("OnEvent", function(self)
         accentRow, h = W:DualRow(parent, y,
             { type = "toggle", text = "Accent Bar",
               tooltip = "Accent bar on the active tab of reskinned windows.",
+              disabled = ns.WSkin.UsesPixelBorders,
+              disabledTooltip = "Select a non-Pixels border style",
               getValue = ns.WSkin.AccentBarShown,
               setValue = function(v) WSLookSet("blizzWinAccentBar", "enabled", v) end },
             { type = "toggle", text = "Link Color",
@@ -4219,7 +4221,7 @@ initFrame:SetScript("OnEvent", function(self)
               getValue = ns.WSkin.LinkColorEnabled,
               setValue = function(v) WSLookSet("blizzWinLinks", "enabled", v) end })
         if not EllesmereUI._prebuilding then
-            AttachLookSwatches(accentRow._leftRegion, accentRow, "blizzWinAccentBar")
+            AttachLookSwatches(accentRow._leftRegion, accentRow, "blizzWinAccentBar", false, ns.WSkin.UsesPixelBorders)
             AttachLookSwatches(accentRow._rightRegion, accentRow, "blizzWinLinks", true)
         end
         y = y - h

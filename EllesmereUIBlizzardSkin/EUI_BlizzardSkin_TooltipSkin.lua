@@ -79,6 +79,7 @@ local FFD, GetFFD = I.FFD, I.GetFFD
         local okLvl, ownerLevel = pcall(owner.GetFrameLevel, owner)
         if not okLvl then return end
         local db, size, key, color, alpha = _resolveConfiguredBorder(prefix, legacySize, colorOverride)
+        alpha = opacityOverride or alpha
         local data = GetFFD(owner)
         if not data.configBorder then
             data.configBorder = CreateFrame("Frame", nil, owner, "BackdropTemplate")
@@ -99,11 +100,11 @@ local FFD, GetFFD = I.FFD, I.GetFFD
         if prefix == "blizzWin" and tex == "pixels-textured"
             and (colorOverride or color.r ~= 1 or color.g ~= 1 or color.b ~= 1) then tex = "pixels" end
         EllesmereUI.SetBorderPixelSampling(data.configBorder, pixelSampling)
-        EllesmereUI.ApplyBorderStyle(data.configBorder, size, color.r, color.g, color.b, opacityOverride or alpha,
+        EllesmereUI.ApplyBorderStyle(data.configBorder, size, color.r, color.g, color.b, alpha,
             tex, db[prefix .. "BorderOffsetX"],
             db[prefix .. "BorderOffsetY"], db[prefix .. "BorderShiftX"], db[prefix .. "BorderShiftY"],
             "blizzardSkin", key, normalizeScale, px)
-        return data.configBorder, size, key, color, px, tex
+        return data.configBorder, size, key, color, px, tex, alpha
     end
     EllesmereUI._applyBlizzardConfiguredBorder = _applyConfiguredBorder
 

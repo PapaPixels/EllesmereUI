@@ -1764,7 +1764,7 @@ end
 --  even one step fits); Shift on -/+ moves by the range's shiftStep when set.
 --  Built once per caller, dressed by opts.skin, refilled on every use:
 --    d:SetRange(step, max[, shiftStep]), d:SetValue(n), d:Current(),
---    d:Open(owner), d:FocusInput(); d._eb, d._extra, d._buttons[key].
+--    d:Open(owner[, xOffset]), d:FocusInput(); d._eb, d._extra, d._buttons[key].
 --  opts: name, width, height, title, editWidth, maxLetters, extraLine,
 --    buttons = { { key, label, width, height, point ("BOTTOMLEFT", "BOTTOM" or
 --    "BOTTOMRIGHT"), onClick, tooltip (text, or a function read on every
@@ -1890,9 +1890,9 @@ function EllesmereUI.CreateQuantityDialog(opts)
     end)
     EllesmereUI.RegisterEscapeClose(d)
 
-    function d:Open(owner)
+    function d:Open(owner, xOffset)
         d:ClearAllPoints()
-        d:SetPoint("BOTTOMLEFT", owner, "TOPLEFT", -4, 6)
+        d:SetPoint("BOTTOMLEFT", owner, "TOPLEFT", xOffset or -4, 6)
         d:Show()
     end
     -- Keyboard on the amount, or, with a controller cursor on screen, the

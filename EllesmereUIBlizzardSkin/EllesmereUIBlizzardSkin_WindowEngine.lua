@@ -291,7 +291,7 @@ local function PaintWindowBorder(host, d)
         local pixelArt = EUI._pixelArtBorders[style]
         local opacity = (d.windowItemQuality or (d.windowOpaqueBorder and WSkin.IsModeTabBorderStyle(style))) and 1 or nil
         local pixelSampling = pixelArt and (d.windowModeTab or d.windowDividers ~= nil)
-        local border, size, key, color, px, texture = EUI._applyBlizzardConfiguredBorder(owner, "blizzWin", 1,
+        local border, size, key, color, px, texture, alpha = EUI._applyBlizzardConfiguredBorder(owner, "blizzWin", 1,
             d.windowBorderTint, opacity, d.windowModeTab and pixelArt, pixelSampling)
         if not border then return end
         if d.windowDefaultEdge then d.windowDefaultEdge:Hide() end
@@ -308,7 +308,7 @@ local function PaintWindowBorder(host, d)
         if d.windowModeTab then
             EUI.SetBorderStyleColor(border, color.r, color.g, color.b, opacity)
         end
-        if d.windowDividers then d.windowDividers(border, texture, size, key, color, px, dock) end
+        if d.windowDividers then d.windowDividers(border, texture, size, key, color, px, dock, alpha) end
         local radius = db.blizzWinCornerRadius or 0
         if radius > 0 and not d.windowIconCell and EUI.RoundedStyleOK(style) then
             local dockBody = dock and FFD[dock]
@@ -382,11 +382,12 @@ function WSkin.IsEmbeddedDropdownMenu(menu)
     return d and d.embeddedDropdownMenu
 end
 
-function WSkin.RegisterWindowBorder(host, defaultEdge, body, topLeft, bottomRight)
+function WSkin.RegisterWindowBorder(host, defaultEdge, body, topLeft, bottomRight, paintDividers)
     if windowBorders[host] then return end
     local d = GetFFD(host)
     d.windowDefaultEdge, d.windowBorderBody = defaultEdge, body
     d.windowTopLeft, d.windowBottomRight = topLeft, bottomRight
+    d.windowDividers = paintDividers
     windowBorders[host] = d
     if not (EllesmereUIDB and EllesmereUIDB.blizzWinBorderTexture) then return end
     if InCombatLockdown() then
@@ -396,13 +397,14 @@ function WSkin.RegisterWindowBorder(host, defaultEdge, body, topLeft, bottomRigh
     end
 end
 
-function WSkin.RegisterWindowIconBorder(host, defaultEdge, tint, corners)
+function WSkin.RegisterWindowIconBorder(host, defaultEdge, tint, corners, roundSoftBorder)
     local d = GetFFD(host)
     d.windowIconCell = true
     d.windowItemQuality = tint ~= nil
     d.windowBorderTint = tint
     d.windowIconCorners = corners
     d.windowModeTab = corners ~= nil
+    d.windowRoundSoftIconBorder = roundSoftBorder
     d.windowOpaqueBorder = true
     WSkin.RegisterWindowBorder(host, defaultEdge)
 end
@@ -418,6 +420,12 @@ function WSkin.SetWindowBorderTint(host, color)
     end
 end
 
+function WSkin.UsesPixelBorders()
+    local db = EllesmereUIDB
+    return db ~= nil and EUI._pixelArtBorders[db.blizzWinBorderTexture] == true
+end
+
+local pixelBordersApplied = false
 function WSkin.RefreshBorders()
     if InCombatLockdown() then
         ns.CombatQueue.Defer("WindowSkinBorders", WSkin.RefreshBorders)
@@ -426,6 +434,11 @@ function WSkin.RefreshBorders()
     for host, d in pairs(windowBorders) do PaintWindowBorder(host, d) end
     if WSkin.RefreshLootWindowBorder then WSkin.RefreshLootWindowBorder() end
     WSkin.RefreshIconCorners()
+    local pixelBorders = WSkin.UsesPixelBorders()
+    if pixelBordersApplied ~= pixelBorders then
+        pixelBordersApplied = pixelBorders
+        WSkin.RefreshLooks()
+    end
 end
 
 function WSkin.RefreshFrameCorners()
@@ -436,6 +449,7 @@ function WSkin.RefreshFrameCorners()
     for host, d in pairs(windowBorders) do
         if not d.windowIconCell then PaintWindowBorder(host, d) end
     end
+    WSkin.RefreshIconCorners(true)
 end
 
 -- Re-resolve every registered shell (style switches + Modern color edits apply
@@ -1100,7 +1114,8 @@ end
 local windowIcons = setmetatable({}, { __mode = "k" })
 -- Flyout tiles pass their temporary artwork and border through the same painter.
 function WSkin.PaintIconCorners(icon, d, style, border, softOwner, corners)
-    local radius = style and EUI.RoundedStyleOK(style) and EllesmereUIDB.blizzWinIconCornerRadius or 0
+    local radiusKey = d.iconUsesFrameRadius and "blizzWinCornerRadius" or "blizzWinIconCornerRadius"
+    local radius = style and EUI.RoundedStyleOK(style) and EllesmereUIDB[radiusKey] or 0
     local st = d.auraRound
     local nativeMask, highlight = d.iconNativeMask, d.iconHighlight
     if radius <= 0 and not (st and st.on) and not nativeMask and not d.iconSoftBorder then return end
@@ -1204,11 +1219,13 @@ local function PaintRegisteredIcon(icon)
         border = nil
         if style == "solid" then
             border = cell.windowCustomBorder
-        elseif (style == "glow" or style == "shadow") and (cell.windowItemQuality or cell.windowModeTab) then
+        elseif (style == "glow" or style == "shadow")
+            and (cell.windowItemQuality or cell.windowModeTab or cell.windowRoundSoftIconBorder) then
             border, softOwner = cell.windowCustomBorder, host
         end
     end
-    local st = WSkin.PaintIconCorners(icon, d, style, border, softOwner, cell and cell.windowIconCorners)
+    local corners = d.iconCorners or (cell and cell.windowIconCorners)
+    local st = WSkin.PaintIconCorners(icon, d, style, border, softOwner, corners)
     if st and cell and cell.windowIconCell then
         local owner = icon:GetParent()
         EUI.MaskRoundedIconLayer(st, owner.GetPushedTexture and owner:GetPushedTexture())
@@ -1218,15 +1235,19 @@ local function PaintRegisteredIcon(icon)
     end
 end
 
-function WSkin.RefreshIconCorners()
+function WSkin.RefreshIconCorners(useFrameRadius)
     if InCombatLockdown() then
         ns.CombatQueue.Defer("WindowIconCorners", WSkin.RefreshIconCorners)
         return
     end
-    for icon in pairs(windowIcons) do PaintRegisteredIcon(icon) end
+    for icon, d in pairs(windowIcons) do
+        if useFrameRadius == nil or useFrameRadius == (d.iconUsesFrameRadius == true) then
+            PaintRegisteredIcon(icon)
+        end
+    end
 end
 
-function WSkin.RegisterWindowIcon(icon, border, background, highlight, nativeMask, squareMask, effects)
+function WSkin.RegisterWindowIcon(icon, border, background, highlight, nativeMask, squareMask, effects, useFrameRadius, corners)
     if not (icon and icon.AddMaskTexture and icon.GetNumMaskTextures) then return end
     local d = GetFFD(icon)
     windowIcons[icon] = d
@@ -1234,6 +1255,8 @@ function WSkin.RegisterWindowIcon(icon, border, background, highlight, nativeMas
     if background then d.iconBackground = background end
     if highlight then d.iconHighlight = highlight end
     if effects then d.iconEffects = effects end
+    if useFrameRadius ~= nil then d.iconUsesFrameRadius = useFrameRadius end
+    if corners ~= nil then d.iconCorners = corners end
     if nativeMask and not d.iconNativeMask then d.iconNativeMask, d.iconBaseMask = nativeMask, nativeMask end
     if squareMask then d.iconSquareMask = squareMask end
     PaintRegisteredIcon(icon)
@@ -1416,6 +1439,7 @@ end
 function WSkin.QualityBorder(owner, icon, r, g, b)
     local host = ApplyQualityBorder(owner, icon, r, g, b)
     if host and windowIcons[icon] then WSkin.RegisterWindowIcon(icon, host) end
+    return host
 end
 
 -- One quest-style reward tile: drop the parchment name plate and every ring
@@ -1696,6 +1720,7 @@ local function UpdateTabVisual(tab)
         local c = sel and TAB_BG_DARK or TAB_BG
         d.bg:SetColorTexture(c[1], c[2], c[3], 1)
     end
+    if d.paintSelection then d.paintSelection(sel) end
 end
 
 local function UpdateAllTabs()
@@ -1730,6 +1755,7 @@ function WSkin.Tab(tab, opts)
     if not tab or tab:IsForbidden() then return end
     local d = GetFFD(tab)
     if opts and opts.darkActive then d.darkActive = true end
+    if opts and opts.paintSelection then d.paintSelection = opts.paintSelection end
     if d.bg then
         UpdateTabVisual(tab)
         if d.label and d.blizLabel and d.blizLabel.GetText then
@@ -1911,6 +1937,7 @@ local function LiveAccent()
 end
 
 function WSkin.AccentBarShown()
+    if WSkin.UsesPixelBorders() then return false end
     local c = EllesmereUIDB and EllesmereUIDB.blizzWinAccentBar
     return not (c and c.enabled == false)
 end

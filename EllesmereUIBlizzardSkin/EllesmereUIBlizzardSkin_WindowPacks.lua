@@ -4720,7 +4720,7 @@ end
 -- MAIL deliberately does not. Mail rows have no other rarity cue and Blizzard's
 -- rounded ring is the only one they get, so flipping it there is a visual
 -- change nobody asked for -- it is a one-word change if that is ever wanted.
-local function SkinMailItemButton(b, quality)
+local function SkinMailItemButton(b, quality, cropOnly)
     if not b or b:IsForbidden() then return end
     local nt = b.GetNormalTexture and b:GetNormalTexture()
     if nt and nt.SetAlpha then nt:SetAlpha(0) end
@@ -4737,7 +4737,10 @@ local function SkinMailItemButton(b, quality)
         local ring = b.IconBorder or (bn and _G[bn .. "IconBorder"])
         if ring and ring.SetAlpha then ring:SetAlpha(0) end
     end
-    if icon then WSkin.SquareIcon(icon, b, quality) end
+    if icon then
+        if cropOnly then WSkin.SquareIcon(icon) else WSkin.SquareIcon(icon, b, quality) end
+    end
+    return icon
 end
 
 do
@@ -7505,20 +7508,115 @@ local function HideNativeMerchantGrid()
     end
 end
 
+local LIST_INSET, LIST_CARD_PAD = 12, 4
+
+local function LayoutMerchantScrollList(sf, parent)
+    local topBar = GetFFD(parent).topBar
+    local filter = parent.FilterDropdown
+    local top = topBar and topBar:GetBottom()
+    local filterBottom = filter and filter:IsShown() and filter:GetBottom()
+    if filterBottom and top then top = math.min(top, filterBottom) end
+    local parentTop = parent:GetTop()
+    local topInset = parentTop and top and parentTop - top or 25
+    if sf.topInset == topInset then return end
+    sf.topInset = topInset
+    sf:SetPoint("TOPLEFT", parent, "TOPLEFT", LIST_INSET - LIST_CARD_PAD, -topInset - LIST_INSET + LIST_CARD_PAD)
+end
+
+local function SkinMerchantListScroll(sf, child, parent)
+    local bar = CreateFrame("EventFrame", nil, parent, "MinimalScrollBar")
+    local barOffset = LIST_INSET - LIST_CARD_PAD - 2
+    bar:SetPoint("TOPRIGHT", sf, "TOPRIGHT", barOffset, -LIST_CARD_PAD)
+    bar:SetPoint("BOTTOMRIGHT", sf, "BOTTOMRIGHT", barOffset, LIST_CARD_PAD)
+    ns.ForeverSkinSheetScrollBar(bar, WSkin)
+
+    local fade, clear = CreateVector2D(0, 16), CreateVector2D(0, 0)
+    local fadeTop, fadeBottom
+    local syncing, offset = false, 0
+    local function ScrollRange()
+        return math.max(0, child:GetHeight() - sf:GetHeight())
+    end
+    local function UpdateHover()
+        local hovered = sf:IsMouseOver() or bar:IsMouseOver()
+        bar:SetAlpha(sf:IsVisible() and hovered and ScrollRange() > 0 and 1 or 0)
+    end
+    local function UpdateScroll()
+        local range = ScrollRange()
+        offset = math.min(offset, range)
+        child:SetPoint("TOPLEFT", sf, "TOPLEFT", 0, offset)
+        syncing = true
+        bar:SetScrollPercentage(range > 0 and offset / range or 0, true)
+        syncing = false
+        local showTop, showBottom = offset > 0.5, range - offset > 0.5
+        if fadeTop ~= showTop then
+            fadeTop = showTop
+            sf:SetAlphaGradient(0, showTop and fade or clear)
+        end
+        if fadeBottom ~= showBottom then
+            fadeBottom = showBottom
+            sf:SetAlphaGradient(1, showBottom and fade or clear)
+        end
+    end
+    local function UpdateRange()
+        local range = ScrollRange()
+        bar:SetVisibleExtentPercentage(range > 0 and sf:GetHeight() / child:GetHeight() or 1)
+        bar:SetPanExtentPercentage(range > 0 and math.min(1, sf.panStep / range) or 0)
+        UpdateScroll()
+        UpdateHover()
+    end
+    bar:RegisterCallback(ScrollBarMixin.Event.OnScroll, function(_, percentage)
+        if not syncing then
+            offset = percentage * ScrollRange()
+            UpdateScroll()
+        end
+    end, bar)
+    sf.panStep = 40
+    sf:EnableMouseWheel(true)
+    sf:SetScript("OnMouseWheel", function(_, delta) bar:OnMouseWheel(delta) end)
+    sf:HookScript("OnSizeChanged", function(_, width)
+        child:SetWidth(math.max(1, width))
+        for _, row in ipairs(sf.rows) do row:SetWidth(math.max(1, width - 2 * LIST_CARD_PAD)) end
+        UpdateRange()
+    end)
+    sf:HookScript("OnShow", UpdateRange)
+    sf:HookScript("OnHide", function() bar:SetAlpha(0) end)
+    sf:SetMouseMotionEnabled(true)
+    local track = bar.Track
+    for _, region in pairs({ sf, bar, track, track and track.Thumb, bar.Back, bar.Forward }) do
+        region:HookScript("OnEnter", UpdateHover)
+        region:HookScript("OnLeave", UpdateHover)
+    end
+    sf.refreshRange = UpdateRange
+    sf.resetScroll = function() offset = 0 end
+    UpdateHover()
+end
+
 -- Build the ScrollFrame (once).
 local function CreateMerchantScrollList(parent)
-    local sf = CreateFrame("ScrollFrame", "WSkinMerchantScrollFrame", parent, "UIPanelScrollFrameTemplate")
-    -- Fits inside MerchantFrame, leaving room for repair/buyback buttons.
-    sf:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, -70)
-    sf:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -32, 80)
+    local forever = EllesmereUI.IS_FOREVER
+    local sf = CreateFrame(forever and "Frame" or "ScrollFrame", "WSkinMerchantScrollFrame", parent,
+        not forever and "UIPanelScrollFrameTemplate" or nil)
+    if forever then
+        -- Clip the child directly so the viewport's alpha gradient applies to the rows.
+        sf:SetClipsChildren(true)
+        LayoutMerchantScrollList(sf, parent)
+        sf:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -LIST_INSET + LIST_CARD_PAD, 80)
+    else
+        sf:SetPoint("TOPLEFT", parent, "TOPLEFT", 20, -70)
+        sf:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -32, 80)
+    end
 
     local child = CreateFrame("Frame", "WSkinMerchantScrollChild", sf)
     child:SetPoint("TOPLEFT")
-    child:SetPoint("TOPRIGHT")
     child:SetSize(1, 1)
-    sf:SetScrollChild(child)
-
     sf.rows = {}
+    if forever then
+        child:SetWidth(math.max(1, sf:GetWidth()))
+        SkinMerchantListScroll(sf, child, parent)
+    else
+        child:SetPoint("TOPRIGHT")
+        sf:SetScrollChild(child)
+    end
     return sf, child
 end
 
@@ -7559,44 +7657,79 @@ function EUI_MerchantFrame_UpdateAltCurrency(index, indexOnPage, canAfford, pref
 	return width;
 end
 
+local function AddMerchantBorder(frame, paintDividers)
+    WSkin.AddBorder(frame)
+    if EllesmereUI.IS_FOREVER then
+        local pp = EllesmereUI.PanelPP or EllesmereUI.PP
+        WSkin.RegisterWindowBorder(frame, pp.GetBorders(frame), nil, nil, nil, paintDividers)
+    end
+end
+
+local function SkinMerchantPageButton(btn, glyph, extraX)
+    if not btn or btn:IsForbidden() then return end
+    SkinLabeledPageButton(btn, glyph, extraX)
+    AddMerchantBorder(btn)
+end
+
+local CreateMerchantDivider, AddMerchantCardBorder
 local function SkinMerchantListItem(item)
     if not item or item:IsForbidden() then return end
 
-    item.bg = item.bg or item:CreateTexture(nil, "BACKGROUND", nil, -7)
-    item.bg:SetColorTexture(Theme.bgR, Theme.bgG, Theme.bgB, Theme.bgA)
-    item.bg:SetPoint("TOPLEFT", 0, 0)
-    item.bg:SetPoint("BOTTOMRIGHT", 0, 0)
-    WSkin.AddBorder(item)
+    local d = GetFFD(item)
+    local newRow = not d.bg
+    local forever = EllesmereUI.IS_FOREVER
+    if newRow then
+        d.bg = SolidTex(item, "BACKGROUND", Theme.bgR, Theme.bgG, Theme.bgB, Theme.bgA, -7)
+        d.bg:SetAllPoints(item)
+        if not forever then AddMerchantBorder(item) end
+    end
 
-    item.SlotTexture:SetSize(item:GetHeight(), item:GetHeight())
-    item.SlotTexture:ClearAllPoints()
-    item.SlotTexture:SetPoint("LEFT", item, "LEFT", 0, 0)
-    item.SlotTexture:SetTexCoord(0, 1, 0, 1)
-
-    item.highlight = item.highlight or item.ItemButton:CreateTexture(nil, "HIGHLIGHT")
-    item.highlight:SetColorTexture(1, 1, 1, 0.1)
-    item.highlight:SetAllPoints(item.bg)
+    local icon = item.SlotTexture
+    local inset = forever and 2 or 0
+    local size = item:GetHeight() - 2 * inset
+    icon:SetSize(size, size)
+    icon:ClearAllPoints()
+    icon:SetPoint("LEFT", item, "LEFT", inset, 0)
+    if forever then
+        WSkin.SetIconCrop(icon, 0.08)
+    else
+        icon:SetTexCoord(0, 1, 0, 1)
+    end
 
     -- Buy button spans the whole row in list mode.
-    item.ItemButton:SetSize(item:GetWidth(), item:GetHeight())
+    if forever then
+        item.ItemButton:ClearAllPoints()
+        item.ItemButton:SetAllPoints(item)
+    else
+        item.ItemButton:SetSize(item:GetWidth(), item:GetHeight())
+    end
     item.ItemButton.PushedTexture:SetTexture(nil)
     item.ItemButton.NormalTexture:SetTexture(nil)
-    item.ItemButton.HighlightTexture:SetTexture(item.highlight)
+    if forever then
+        item.ItemButton.HighlightTexture:SetAlpha(0)
+    else
+        item.highlight = item.highlight or item.ItemButton:CreateTexture(nil, "HIGHLIGHT")
+        item.highlight:SetColorTexture(1, 1, 1, 0.1)
+        item.highlight:SetAllPoints(d.bg)
+        item.ItemButton.HighlightTexture:SetTexture(item.highlight)
+    end
 
-    -- Quality ring: STRIPPED, not repositioned onto the icon as it used to be.
-    -- It is ROUNDED, and in list mode it was being stretched to the full icon
-    -- square, so the round art was at its most obvious here.
-    --
-    -- The rarity comes back as a SQUARE border reading that same ring. Anchored
-    -- to SlotTexture because THAT is the icon in list mode -- the row repurposes
-    -- Blizzard's empty-slot art (`row.SlotTexture:SetTexture(texture)` in
-    -- UpdateCustomMerchantList) rather than using the item button's own icon.
-    --
-    -- Registered against the ItemButton, so the color is read from
-    -- ItemButton.IconBorder and the repaint hook lands on the frame Blizzard
-    -- actually calls SetItemButtonQuality on.
+    -- The list draws the icon in SlotTexture. Its border follows the button's native rarity ring.
     item.ItemButton.IconBorder:SetAlpha(0)
-    WSkin.QualityBorder(item.ItemButton, item.SlotTexture)
+    local qualityBorder = WSkin.QualityBorder(item.ItemButton, icon)
+    if forever then
+        if newRow then
+            local hover, flash = ns.ForeverBuildSlotHover(item.ItemButton, icon)
+            WSkin.RegisterWindowIcon(icon, qualityBorder, nil, hover, nil, nil, { flash }, true, 1 + 4)
+            CreateMerchantDivider(item, icon, 0)
+            local edge = CreateFrame("Frame", nil, item)
+            edge:SetAllPoints(item)
+            edge:SetFrameLevel(item:GetFrameLevel() + 2)
+            GetFFD(edge).bg = d.bg
+            AddMerchantCardBorder(item, edge)
+        end
+        if not newRow then d.merchantDivider:SetHeight(item:GetHeight()) end
+    end
     item.ItemButton.IconOverlay:ClearAllPoints()
     item.ItemButton.IconOverlay:SetPoint("CENTER", item.SlotTexture, "CENTER", 0, 0)
     item.ItemButton.IconOverlay:SetSize(item.SlotTexture:GetWidth(), item.SlotTexture:GetHeight())
@@ -7639,7 +7772,11 @@ local function UpdateCustomMerchantList(sf, child)
     local numItems = isBuyback and GetNumBuybackItems() or GetMerchantNumItems()
 
     local rowHeight = (EllesmereUIDB and EllesmereUIDB.merchantListRowHeight) or 32
-    local rowSpacing = 4
+    local forever = EllesmereUI.IS_FOREVER
+    local rowSpacing = forever and 8 or 4
+    local rowInset = forever and LIST_CARD_PAD or 0
+    local lastRow = 0
+    if forever then LayoutMerchantScrollList(sf, MerchantFrame) end
     local playerMoney = GetMoney()
     local MAX_MONEY_DISPLAY_WIDTH = 120
 
@@ -7647,11 +7784,13 @@ local function UpdateCustomMerchantList(sf, child)
         local row = sf.rows[i]
         if not row then
             row = CreateFrame("Button", "EUI_MerchantItem"..i, child, "MerchantItemTemplate")
-            row:SetSize(sf:GetWidth(), rowHeight)
+            local width = sf:GetWidth()
+            if forever then width = math.max(1, width - 2 * rowInset) end
+            row:SetSize(width, rowHeight)
             if i == 1 then
-                row:SetPoint("TOPLEFT", child, "TOPLEFT", 0, 0)
+                row:SetPoint("TOPLEFT", child, "TOPLEFT", rowInset, -rowInset)
             else
-                row:SetPoint("TOPLEFT", sf.rows[i-1], "BOTTOMLEFT", 0, -rowSpacing)
+                row:SetPoint("TOPLEFT", sf.rows[i - 1], "BOTTOMLEFT", 0, -rowSpacing)
             end
 
             SkinMerchantListItem(row)
@@ -7678,10 +7817,20 @@ local function UpdateCustomMerchantList(sf, child)
         end
 
         if name then
+            lastRow = i
             local itemLink = isBuyback and GetBuybackItemLink(i) or GetMerchantItemLink(i)
 
             row.Name:SetText(name)
-            row.SlotTexture:SetTexture(texture)
+            if forever then
+                local rowData = GetFFD(row)
+                if rowData.listTexture ~= texture then
+                    row.SlotTexture:SetTexture(texture)
+                    WSkin.SetIconCrop(row.SlotTexture, 0.08)
+                    rowData.listTexture = texture
+                end
+            else
+                row.SlotTexture:SetTexture(texture)
+            end
 
             row.ItemButton:SetID(i)
             row.ItemButton.link = itemLink
@@ -7804,6 +7953,16 @@ local function UpdateCustomMerchantList(sf, child)
     for i = numItems + 1, #sf.rows do
         sf.rows[i]:Hide()
     end
+    if forever then
+        sf.panStep = rowHeight + rowSpacing
+        local height = math.max(1, 2 * LIST_CARD_PAD + lastRow * (rowHeight + rowSpacing) - rowSpacing)
+        if child:GetHeight() ~= height then child:SetHeight(height) end
+        if sf.buybackTab ~= isBuyback then
+            sf.buybackTab = isBuyback
+            sf.resetScroll()
+        end
+        sf.refreshRange()
+    end
 end
 
 -- Options toggle entry point: re-sync row height.
@@ -7817,7 +7976,7 @@ EllesmereUI._Merchant_RefreshRowHeight = function()
     local rowHeight = (EllesmereUIDB and EllesmereUIDB.merchantListRowHeight) or 32
     -- Rows are cached, so resize each existing one; rows created later pick up
     -- the new height by default.
-    for _, row in ipairs(sf.rows or {}) do
+    for _, row in ipairs(sf.rows) do
         row:SetHeight(rowHeight)
         SkinMerchantListItem(row)
     end
@@ -7828,22 +7987,147 @@ EllesmereUI._Merchant_RefreshRowHeight = function()
     end
 end
 
--- Vendor item tile: parchment gone, flat card, white name, squared icon.
+local function PaintMerchantDivider(line)
+    local item = line:GetParent():GetParent()
+    local d = GetFFD(item)
+    local es = item:GetEffectiveScale()
+    local pp = EllesmereUI.PP
+    local pixel = pp.perfect / es
+    local style, size, px = d.merchantDividerStyle, d.merchantDividerSize, d.merchantDividerPx
+    local _, icon, _, _, y = line:GetPoint(1)
+    local width, offset = pixel, pixel
+    if EllesmereUI._pixelArtBorders[style] and size > 0 then
+        local thick = EllesmereUI.BorderCompanionThickness(style, size, px, es)
+        local pixels = math.max(1, math.floor(thick / pixel + 0.5))
+        -- Align the bright texel to the first pixel after the icon gap.
+        local stroke = 5.5 / 32
+        local column = math.floor(stroke * pixels)
+        local phase = stroke - (column + 0.5) / pixels
+        offset, width = (1 - column) * pixel, pixels * pixel
+        local wrap = "CLAMPTOBLACKADDITIVE"
+        line:SetTexture(EllesmereUI.GetBorderCompanion(style, "sepV"), wrap, wrap, "NEAREST")
+        line:SetTexCoord(phase, 1 + phase, 0, 1)
+    elseif (style == "glow" or style == "shadow") and size > 0 then
+        local edge = EllesmereUI.BorderPlacement(size, style, nil, nil, nil, nil, nil, nil, px, nil, es)
+        width = math.max(pixel, pp.SnapForES(edge, es))
+        offset = pixel - pp.SnapForES(width / 2, es)
+        -- The left edge of the shared glow atlas contains the vertical falloff.
+        line:SetTexture(EllesmereUI.ResolveBorderTexture(style))
+        line:SetTexCoord(0, 1 / 8, 0, 1)
+    else
+        if style == "solid" and size > 0 then width = (px or size) * pixel end
+        line:SetColorTexture(1, 1, 1, 1)
+        line:SetTexCoord(0, 1, 0, 1)
+    end
+    local color = d.merchantDividerColor
+    if color then
+        line:SetVertexColor(color.r, color.g, color.b, size > 0 and (d.merchantDividerAlpha or 1) or 0)
+    else
+        line:SetVertexColor(Theme.brdR, Theme.brdG, Theme.brdB, Theme.brdA)
+    end
+    line:SetPoint("LEFT", icon, "RIGHT", offset, y)
+    line:SetWidth(width)
+end
+
+CreateMerchantDivider = function(item, icon, y)
+    local host = CreateFrame("Frame", nil, item)
+    host:SetAllPoints(item)
+    local line = host:CreateTexture(nil, "OVERLAY")
+    line:SetSnapToPixelGrid(true)
+    line:SetTexelSnappingBias(0)
+    line:SetPoint("LEFT", icon, "RIGHT", 0, y)
+    line:SetHeight(item:GetHeight())
+    PaintMerchantDivider(line)
+    EllesmereUI.RegisterPxReapply(line, PaintMerchantDivider)
+    GetFFD(item).merchantDivider = line
+end
+
+AddMerchantCardBorder = function(item, edge)
+    if not EllesmereUI.IS_FOREVER then
+        AddMerchantBorder(edge)
+        return
+    end
+    local d = GetFFD(item)
+    local function PaintDivider(border, style, size, _, color, px, _, alpha)
+        d.merchantDividerStyle, d.merchantDividerSize = style, size
+        d.merchantDividerColor, d.merchantDividerPx, d.merchantDividerAlpha = color, px, alpha
+        local line = d.merchantDivider
+        if line then
+            local strata, level = ns.ForeverBorderLayer(border)
+            local host = line:GetParent()
+            host:SetFrameStrata(strata)
+            host:SetFrameLevel(math.max(edge:GetFrameLevel(), level) + 1)
+            PaintMerchantDivider(line)
+        end
+    end
+    local line = d.merchantDivider
+    if line then line:GetParent():SetFrameLevel(edge:GetFrameLevel() + 1) end
+    AddMerchantBorder(edge, PaintDivider)
+end
+
+local function SkinForeverMerchantTileIcon(item, btn, icon)
+    local d = GetFFD(item)
+    local buyback = item == _G.MerchantBuyBackItem
+    -- The latest buyback slot is shorter, and Blizzard reapplies its native scale.
+    if buyback or not d.merchantDivider then
+        icon:ClearAllPoints()
+        if buyback then
+            icon:SetAllPoints(btn)
+        else
+            icon:SetPoint("TOPLEFT", btn, "TOPLEFT", 0, 1)
+            icon:SetPoint("BOTTOMRIGHT", btn, "BOTTOMRIGHT", 0, -2)
+        end
+    end
+    if not d.merchantDivider then
+        CreateMerchantDivider(item, buyback and btn or icon, buyback and 0 or 0.5)
+        local hover, flash = ns.ForeverBuildSlotHover(btn, icon)
+        WSkin.RegisterWindowIcon(icon, nil, nil, hover, nil, nil, { flash }, true, 1 + 4) -- top left and bottom left
+    end
+    -- The buyback button keeps its undo glyph even when there is no item.
+    d.merchantDivider:SetShown(btn:IsShown())
+    local highlight = btn:GetHighlightTexture()
+    if highlight then highlight:SetAlpha(0) end
+    local pushed = btn:GetPushedTexture()
+    if pushed then pushed:SetAlpha(0) end
+end
+
+local function LayoutMerchantBuyback(item)
+    local d = GetFFD(item)
+    if not d.buybackTrimmed then
+        item:SetHeight(item:GetHeight() - 1)
+        d.buybackTrimmed = true
+    end
+    local frame = _G.MerchantFrame
+    local repair = _G.MerchantRepairItemButton
+    local junk = _G.MerchantSellAllJunkButton
+    local windowLeft, windowBottom = frame:GetLeft(), frame:GetBottom()
+    local repairLeft = repair and repair:IsShown() and repair:GetLeft()
+    local buttonBottom = (repairLeft and repair:GetBottom()) or (junk and junk:GetBottom())
+    if not (windowLeft and windowBottom and buttonBottom) then return end
+    local inset = repairLeft and repairLeft - windowLeft or 6
+    local bottom = buttonBottom - windowBottom
+    if d.buybackInset == inset and d.buybackBottom == bottom then return end
+    item:ClearAllPoints()
+    item:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -inset, bottom)
+    d.buybackInset, d.buybackBottom = inset, bottom
+end
+
+-- Vendor item tile: parchment gone, flat card, squared icon.
 local function SkinMerchantTile(item)
     if not item or item:IsForbidden() then return end
+    local buyback = EllesmereUI.IS_FOREVER and item == _G.MerchantBuyBackItem
+    if buyback then LayoutMerchantBuyback(item) end
     local d = GetFFD(item)
-    if not d.bg then
-        WSkin.FadeRegions(item)
+    local newCard = not d.bg
+    if newCard then
         local bg = item:CreateTexture(nil, "BACKGROUND", nil, -7)
         bg:SetColorTexture(Theme.bgR, Theme.bgG, Theme.bgB, Theme.bgA)
         bg:SetPoint("TOPLEFT", 2, -1)
         bg:SetPoint("BOTTOMRIGHT", -2, 1)
         d.bg = bg
-        WSkin.AddBorder(item)
     end
     local name = item.GetName and item:GetName()
-    -- Blizzard repaints the slot/tile art per page flip; re-fade each pass,
-    -- sparing our card fill.
+    -- Blizzard repaints the slot/tile art per page flip.
     local keep = { [d.bg] = true }
     WSkin.FadeRegions(item, keep)
     local nameFS = item.Name or (name and _G[name .. "Name"])
@@ -7854,29 +8138,29 @@ local function SkinMerchantTile(item)
         if nameFS.SetMaxLines then nameFS:SetMaxLines(2) end
     end
     local btn = item.ItemButton or (name and _G[name .. "ItemButton"])
-    -- true: vendor tiles take the square RARITY border. Mail, which shares this
-    -- helper, keeps Blizzard's rounded ring.
-    if btn then SkinMailItemButton(btn, true) end
+    local icon = btn and SkinMailItemButton(btn, true, buyback)
 
-    -- CENTRE THE ICON IN THE ROW.
-    --
-    -- MerchantItemTemplate is 44px tall and anchors its ItemButton TOPLEFT to
-    -- the row, but the button is only ~37px -- so the icon sits against the top
-    -- with a 7px gap underneath, about 3-4px high of centre. Blizzard's slot
-    -- and name-plate art hid that; the flat card this pack draws spans the full
-    -- row, so the icon reads as top-heavy against it.
-    --
-    -- Re-anchored to LEFT rather than nudged by a fixed offset, so it stays
-    -- centred whatever height the row ends up. Done ONCE -- the tiles are
-    -- re-skinned on every page flip and re-anchoring per pass is pointless.
+    -- Center the button in the card once. Blizzard's template pins it to the top.
     if btn and btn.SetPoint then
         local bd = GetFFD(btn)
         if not bd.rowCentred then
             bd.rowCentred = true
             btn:ClearAllPoints()
-            btn:SetPoint("LEFT", item, "LEFT", 0, 0)
+            if buyback then
+                btn:SetPoint("TOPLEFT", item, "TOPLEFT", 1, -1)
+                btn:SetPoint("BOTTOMRIGHT", item, "BOTTOMLEFT", item:GetHeight() - 1, 1)
+            else
+                btn:SetPoint("LEFT", item, "LEFT", EllesmereUI.IS_FOREVER and 2 or 0, 0)
+            end
         end
+        if EllesmereUI.IS_FOREVER and icon then SkinForeverMerchantTileIcon(item, btn, icon) end
     end
+    if newCard then AddMerchantCardBorder(item, item) end
+end
+
+local function SkinMerchantGridCards()
+    for i = 1, 12 do SkinMerchantTile(_G["MerchantItem" .. i]) end
+    SkinMerchantTile(_G.MerchantBuyBackItem)
 end
 
 -- Lift a tile's currency display 6px above Blizzard's seat. Blizzard re-anchors
@@ -7909,14 +8193,13 @@ local function LiftMerchantCurrency(fr)
 end
 
 -- Bottom-left icon buttons (repair item/repair all/guild repair/sell junk):
--- pictured icon is the button's FIRST texture region, cropped from a shared
--- sheet, so texcoords MUST be kept (never SquareIcon). Fade the box art
--- around it, seat flat fill + themed border + white hover.
-local function SkinMerchantIconButton(btn)
+-- Fade the box art around the native icon and add a fill and hover.
+local function SkinMerchantIconButton(btn, itemIcon)
     if not btn or btn:IsForbidden() then return end
     local d = GetFFD(btn)
-    local icon = btn.Icon or select(1, btn:GetRegions())
-    if not d.bg then
+    local icon = btn.Icon or btn.icon or select(1, btn:GetRegions())
+    local firstPaint = not d.bg
+    if firstPaint then
         local fill = btn:CreateTexture(nil, "BACKGROUND", nil, -8)
         fill:SetColorTexture(Theme.bgR, Theme.bgG, Theme.bgB, Theme.bgA)
         fill:SetAllPoints(btn)
@@ -7929,7 +8212,24 @@ local function SkinMerchantIconButton(btn)
             icon:ClearAllPoints()
             icon:SetPoint("TOPLEFT", 1, -1)
             icon:SetPoint("BOTTOMRIGHT", -1, 1)
+            if EllesmereUI.IS_FOREVER then
+                if not itemIcon then
+                    -- Zoom within the icon's own atlas cell.
+                    local left, top, _, bottom, right = icon:GetTexCoord()
+                    local dx, dy = (right - left) * 0.09, (bottom - top) * 0.09
+                    icon:SetTexCoord(left + dx, right - dx, top + dy, bottom - dy)
+                end
+                WSkin.AddBorder(btn, nil, nil, nil, nil, "OVERLAY", 7)
+                WSkin.RegisterWindowIconBorder(btn, (EllesmereUI.PanelPP or EllesmereUI.PP).GetBorders(btn), nil, nil, true)
+            end
         end
+    end
+    if icon and icon.ClearAllPoints and EllesmereUI.IS_FOREVER and (firstPaint or itemIcon) then
+        if itemIcon then
+            WSkin.RemoveStockItemMask(btn, icon)
+            WSkin.SetIconCrop(icon, 0.09)
+        end
+        WSkin.RegisterWindowIcon(icon, btn, d.bg, d.hover, nil, nil, nil, false)
     end
     for _, g in ipairs({ "GetNormalTexture", "GetPushedTexture",
                          "GetDisabledTexture", "GetHighlightTexture" }) do
@@ -7940,9 +8240,59 @@ local function SkinMerchantIconButton(btn)
     for i = 1, #regions do
         local r = regions[i]
         if r and r ~= icon and r ~= d.bg and r ~= d.hover
-           and r.IsObjectType and r:IsObjectType("Texture") then
+           and r.GetObjectType and r:GetObjectType() == "Texture" then
             r:SetAlpha(0)
         end
+    end
+end
+
+local function SkinMerchantListBuyback(frame)
+    local item = _G.MerchantBuyBackItem
+    local btn = item and item.ItemButton
+    if not btn or item:IsForbidden() or item:IsProtected() or not item:IsShown() then return end
+    local d = GetFFD(item)
+    local name = item.Name or _G.MerchantBuyBackItemName
+    local money = _G.MerchantBuyBackItemMoneyFrame
+    if not d.listBuyback then
+        item:SetSize(36, 36)
+        btn:ClearAllPoints()
+        btn:SetAllPoints(item)
+        if name then
+            name:ClearAllPoints()
+            name:SetPoint("TOPLEFT", item, "TOPRIGHT", 8, -3)
+            name:SetHeight(16)
+            name:SetMaxLines(1)
+            name:SetWordWrap(false)
+            name:SetJustifyH("LEFT")
+            name:SetAlpha(1)
+        end
+        if money then
+            money:ClearAllPoints()
+            money:SetPoint("BOTTOMLEFT", item, "BOTTOMRIGHT", 21, 3)
+        end
+        d.listBuyback = true
+    end
+    if money then money:SetAlpha(GetNumBuybackItems() > 0 and 1 or 0) end
+    WSkin.FadeRegions(item)
+    SkinMerchantIconButton(btn, true)
+    local repair, repairAll = _G.MerchantRepairItemButton, _G.MerchantRepairAllButton
+    local guild, junk = _G.MerchantGuildBankRepairButton, _G.MerchantSellAllJunkButton
+    local after = (junk and junk:IsShown() and junk) or (guild and guild:IsShown() and guild)
+        or (repairAll and repairAll:IsShown() and repairAll)
+    local left, right = repairAll and repairAll:GetLeft(), repair and repair:GetRight()
+    local gap = left and right and math.max(4, left - right) or 8
+    if d.listBuybackAfter ~= after or d.listBuybackGap ~= gap then
+        item:ClearAllPoints()
+        if after then
+            item:SetPoint("LEFT", after, "RIGHT", gap, 0)
+        else
+            item:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", LIST_INSET, 33)
+        end
+        d.listBuybackAfter, d.listBuybackGap = after, gap
+    end
+    if name then
+        local frameRight, itemRight = frame:GetRight(), item:GetRight()
+        if frameRight and itemRight then name:SetWidth(math.max(1, frameRight - itemRight - LIST_INSET - 8)) end
     end
 end
 
@@ -8147,8 +8497,19 @@ local function EX_MakePageButton(f, kind, glyph, point, x)
     b:SetDisabledTexture("Interface\\Buttons\\UI-SpellbookIcon-" .. kind .. "Page-Disabled")
     b:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
     b:SetScript("OnClick", function() EX_Flip(kind == "Prev" and -1 or 1) end)
-    SkinLabeledPageButton(b, glyph, glyph == ">" and 2 or nil)
+    SkinMerchantPageButton(b, glyph, glyph == ">" and 2 or nil)
     return b
+end
+
+local function AlignMerchantPager(prev, nextButton, left, right)
+    if prev and left then
+        prev:ClearAllPoints()
+        prev:SetPoint("TOPLEFT", left, "BOTTOMLEFT", 0, -10)
+    end
+    if nextButton and right then
+        nextButton:ClearAllPoints()
+        nextButton:SetPoint("TOPRIGHT", right, "BOTTOMRIGHT", 0, -10)
+    end
 end
 
 local function EX_UpdatePager(f, numPages)
@@ -8159,6 +8520,10 @@ local function EX_UpdatePager(f, numPages)
         ex.text:SetPoint("BOTTOM", f, "BOTTOM", 0, 86)
         WSkin.Font(ex.text)
         WSkin.White(ex.text)
+    end
+    if EllesmereUI.IS_FOREVER and (ex.pagerCols ~= ex.cols or ex.pagerPerPage ~= ex.perPage) then
+        ex.pagerCols, ex.pagerPerPage = ex.cols, ex.perPage
+        AlignMerchantPager(ex.prev, ex.next, ex.tiles[ex.perPage - ex.cols + 1], ex.tiles[ex.perPage])
     end
     local show = numPages > 1
     ex.prev:SetShown(show)
@@ -8224,7 +8589,7 @@ EX_Update = function()
     -- stays at row 5; keep its native offset from the Sell All Junk button, which
     -- rides the frame's bottom edge, so it follows the grid.
     local bb, junk = _G.MerchantBuyBackItem, _G.MerchantSellAllJunkButton
-    if bb and junk then
+    if not EllesmereUI.IS_FOREVER and bb and junk then
         if not ex.bbPoint and bb:GetNumPoints() > 0 and bb:GetLeft() and junk:GetLeft() then
             local p, rel, rp, x, y = bb:GetPoint(1)
             ex.bbPoint = { p, rel, rp, x or 0, y or 0 }
@@ -8645,6 +9010,141 @@ EllesmereUI._Merchant_RefreshOwned = function()
     OwnedRedraw()
 end
 
+local function AlignMerchantMoney()
+    local money, inset, currencies = _G.MerchantMoneyFrame, _G.MerchantMoneyInset, _G.MerchantExtraCurrencyInset
+    if not (money and inset) or (currencies and currencies:IsShown()) then return end
+    if money:IsForbidden() or money:IsProtected() then return end
+    -- The small money frame seats the coin 13px in from its right edge.
+    money:ClearAllPoints()
+    money:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", 8, 5)
+end
+
+local function BuildMerchantTabs(frame)
+    local tabs = {}
+    for i = 1, 2 do
+        local tab = _G["MerchantFrameTab" .. i]
+        if tab then
+            WSkin.Tab(tab)
+            tabs[#tabs + 1] = tab
+        end
+    end
+    WSkin.NormalizeTabRow(tabs)
+    local first = tabs[1]
+    if not EllesmereUI.IS_FOREVER or not first then return end
+
+    local firstPoint = { first:GetPoint(1) }
+    local art = {}
+    local gold = { r = 1, g = 0.75, b = 0.24 }
+    local windowBorder, style, size, key, borderColor, px, alpha
+    local goldOpacity = 0.95
+    local goldColor = CreateColor(gold.r, gold.g, gold.b, goldOpacity)
+    local pixelTabs
+    local function Layout()
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer(first, Layout)
+            return
+        end
+        local enabled = EllesmereUI._pixelArtBorders[style] == true and size > 0
+        if not enabled then
+            if not pixelTabs then return end
+            pixelTabs = false
+            EllesmereUI.RegisterPxReapply(first, nil)
+            for _, tab in ipairs(tabs) do
+                art[tab].clip:Hide()
+                WSkin.Tab(tab)
+            end
+            first:ClearAllPoints()
+            first:SetPoint(unpack(firstPoint))
+            WSkin.NormalizeTabRow(tabs)
+            return
+        end
+        if not pixelTabs then EllesmereUI.RegisterPxReapply(first, Layout) end
+        pixelTabs = true
+
+        local pp = EllesmereUI.PP
+        local db = EllesmereUIDB
+        local es = frame:GetEffectiveScale()
+        local pixel = pp.perfect / es
+        local left, right, _, bottom = EllesmereUI.BorderReach(size, style,
+            db.blizzWinBorderOffsetX, db.blizzWinBorderOffsetY, db.blizzWinBorderShiftX, db.blizzWinBorderShiftY,
+            "blizzardSkin", key, px, nil, alpha, es)
+        local edge, _, offsetY, _, shiftY = EllesmereUI.BorderPlacement(size, style,
+            db.blizzWinBorderOffsetX, db.blizzWinBorderOffsetY, db.blizzWinBorderShiftX, db.blizzWinBorderShiftY,
+            "blizzardSkin", key, px, nil, es)
+        local gap = math.max(6, pp.SnapForES(math.max(0, left or 0) + math.max(0, right or 0) + 2 * pixel, es))
+        local overlap = db.blizzWinBorderTexture == "pixels" and pixel or 2 * pixel
+        local seam = overlap - pp.SnapForES(bottom or 0, es)
+        local tabTop = math.max(0, seam)
+        local clipTop = seam - tabTop
+        local rimTop = clipTop + edge - offsetY - shiftY
+        local margin = edge + math.max(math.abs(left or 0), math.abs(right or 0), math.abs(bottom or 0))
+        local strata, level = ns.ForeverBorderLayer(windowBorder)
+        local prev
+        for _, tab in ipairs(tabs) do
+            local state = art[tab]
+            local tabOptions
+            if not state then
+                local clip = CreateFrame("Frame", nil, tab)
+                clip:SetClipsChildren(true)
+                local rim = CreateFrame("Frame", nil, clip)
+                state = { clip = clip, rim = rim }
+                art[tab] = state
+                tabOptions = { paintSelection = function(selected)
+                    if not pixelTabs then return end
+                    local d = GetFFD(tab)
+                    d.activeHL:Hide()
+                    if selected then d.label:SetTextColor(gold.r, gold.g, gold.b, 1) end
+                    if state.selected == selected then return end
+                    if InCombatLockdown() then
+                        ns.CombatQueue.Defer(state.rim, function() WSkin.Tab(tab) end)
+                        return
+                    end
+                    local border, _, _, color = EllesmereUI._applyBlizzardConfiguredBorder(state.rim, "blizzWin", 1,
+                        selected and gold or nil, selected and goldOpacity or 1, nil, true)
+                    if not border then return end
+                    state.selected = selected
+                    local backdrop = EllesmereUI._bdBorderData[border]
+                    if not backdrop then return end
+                    local r, g, b = color.r, color.g, color.b
+                    if selected then
+                        r, g, b = borderColor.r, borderColor.g, borderColor.b
+                        if style == "pixels-textured" then
+                            -- Match the textured frame's baked bottom stroke on the white tab art.
+                            r, g, b = r * 54 / 255, g * 50 / 255, b * 43 / 255
+                        end
+                    end
+                    local top = CreateColor(r, g, b, 1)
+                    local bottom = selected and goldColor or top
+                    if backdrop.LeftEdge then backdrop.LeftEdge:SetGradient("VERTICAL", bottom, top) end
+                    if backdrop.RightEdge then backdrop.RightEdge:SetGradient("VERTICAL", bottom, top) end
+                end }
+            end
+            tab:ClearAllPoints()
+            if prev then
+                tab:SetPoint("TOPLEFT", prev, "TOPRIGHT", gap, 0)
+            else
+                tab:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 12, tabTop)
+            end
+            prev = tab
+            state.clip:SetFrameStrata(strata)
+            state.clip:SetFrameLevel(level + 1)
+            state.rim:SetFrameLevel(level + 2)
+            state.clip:SetPoint("TOPLEFT", tab, "TOPLEFT", -margin, clipTop)
+            state.clip:SetPoint("BOTTOMRIGHT", tab, "BOTTOMRIGHT", margin, -margin)
+            -- The side strips start at the join, with the top edge and corners clipped.
+            state.rim:SetPoint("TOPLEFT", tab, "TOPLEFT", 0, rimTop)
+            state.rim:SetPoint("BOTTOMRIGHT", tab, "BOTTOMRIGHT")
+            state.selected = nil
+            state.clip:Show()
+            WSkin.Tab(tab, tabOptions)
+        end
+    end
+    return function(border, texture, borderSize, sizeKey, color, edgePx, _, opacity)
+        windowBorder, style, size, key, borderColor, px, alpha = border, texture, borderSize, sizeKey, color, edgePx, opacity
+        Layout()
+    end
+end
+
 local _merchantHooked = false
 local function Skin_Merchant()
     local f = _G.MerchantFrame
@@ -8657,6 +9157,27 @@ local function Skin_Merchant()
     if _G.MerchantFrameBg then _G.MerchantFrameBg:SetAlpha(0) end
     local title = (f.TitleContainer and f.TitleContainer.TitleText) or _G.MerchantNameText
     if title then WSkin.Font(title); WSkin.White(title) end
+    local d = GetFFD(f)
+    if not d.merchantTabsBuilt then
+        d.merchantTabsBuilt = true
+        local paintTabs = BuildMerchantTabs(f)
+        if EllesmereUI.IS_FOREVER then
+            local topBar = d.topBar
+            local paintHeader = ns.ForeverBuildDividers(f, topBar, nil, nil, nil, true)
+            WSkin.SetWindowBorderDetails(f, nil, nil, function(...)
+                paintHeader(...)
+                if paintTabs then paintTabs(...) end
+            end, true)
+            local close = f.CloseButton or (f.TitleContainer and f.TitleContainer.CloseButton)
+                or f.ClosePanelButton or _G.MerchantFrameCloseButton
+            ns.ForeverSkinClose(close, topBar)
+            if title then
+                title:ClearAllPoints()
+                title:SetPoint("CENTER", topBar, "CENTER")
+                title:SetJustifyH("CENTER")
+            end
+        end
+    end
 
     -- Money / alt-currency wells along the bottom.
     for _, n in ipairs({ "MerchantMoneyInset", "MerchantExtraCurrencyInset" }) do
@@ -8666,12 +9187,13 @@ local function Skin_Merchant()
         local el = _G[n]
         if el then WSkin.FadeRegions(el); WSkin.Register(el, true) end
     end
+    if EllesmereUI.IS_FOREVER then AlignMerchantMoney() end
 
     if EllesmereUIDB.merchantShowAsList then
         HideNativeMerchantGrid()
+        if EllesmereUI.IS_FOREVER then SkinMerchantListBuyback(f) end
 
         -- The list's frames live in the frame data, never on MerchantFrame itself.
-        local d = GetFFD(f)
         if not d.merchantList then
             local sf, child = CreateMerchantScrollList(f)
             d.merchantList = sf
@@ -8679,10 +9201,8 @@ local function Skin_Merchant()
         end
     else
         -- Item tiles (10 merchant, buyback page reuses up to 12) plus the most-recent-buyback slot on the merchant tab.
-        for i = 1, 12 do SkinMerchantTile(_G["MerchantItem" .. i]) end
-        SkinMerchantTile(_G.MerchantBuyBackItem)
-        -- Main grid 3px lower: MerchantItem1 is the chain root, so one shift
-        -- moves the grid (MerchantBuyBackItem anchors separately and stays put). One-shot, all points preserved.
+        SkinMerchantGridCards()
+        -- MerchantItem1 is the chain root, so one shift moves the grid 3px lower.
         local it1 = _G.MerchantItem1
         if it1 and not GetFFD(it1).shifted then
             local np = it1:GetNumPoints() or 0
@@ -8704,8 +9224,13 @@ local function Skin_Merchant()
             LiftMerchantCurrency(_G["MerchantItem" .. i .. "AltCurrencyFrame"])
         end
 
-        SkinLabeledPageButton(_G.MerchantPrevPageButton, "<")
-        SkinLabeledPageButton(_G.MerchantNextPageButton, ">", 2)
+        SkinMerchantPageButton(_G.MerchantPrevPageButton, "<")
+        SkinMerchantPageButton(_G.MerchantNextPageButton, ">", 2)
+        if EllesmereUI.IS_FOREVER and not d.merchantPagerAligned then
+            AlignMerchantPager(_G.MerchantPrevPageButton, _G.MerchantNextPageButton,
+                _G.MerchantItem9, _G.MerchantItem10)
+            d.merchantPagerAligned = true
+        end
     end
 
     -- Bottom-left icon buttons (guild repair only exists in a guild).
@@ -8715,14 +9240,6 @@ local function Skin_Merchant()
     end
     if _G.MerchantPageText then WSkin.Font(_G.MerchantPageText); WSkin.White(_G.MerchantPageText) end
 
-    -- Tabs
-    local mTabs = {}
-    for i = 1, 2 do
-        local tab = _G["MerchantFrameTab" .. i]
-        if tab then WSkin.Tab(tab); mTabs[#mTabs + 1] = tab end
-    end
-    WSkin.NormalizeTabRow(mTabs)
-
     if OwnedOn() then SetOwnedActive(true) end
     if ExpandOn() then
         EnsureExpand()
@@ -8731,16 +9248,19 @@ local function Skin_Merchant()
 
     if not _merchantHooked then
         _merchantHooked = true
+        if EllesmereUI.IS_FOREVER and type(_G.MerchantFrame_UpdateCurrencies) == "function" then
+            hooksecurefunc("MerchantFrame_UpdateCurrencies", AlignMerchantMoney)
+        end
         -- Blizzard re-textures tiles on every page flip/tab swap/vendor open, so re-run the (idempotent) tile pass on its repaint.
         if type(_G.MerchantFrame_Update) == "function" then
             hooksecurefunc("MerchantFrame_Update", WSkin.Debounce(function()
                 if f:IsVisible() then
                     local d = FFD[f]
                     if EllesmereUIDB.merchantShowAsList and d and d.merchantList then
+                        if EllesmereUI.IS_FOREVER then SkinMerchantListBuyback(f) end
                         UpdateCustomMerchantList(d.merchantList, d.merchantListChild)
                     else
-                        for i = 1, 12 do SkinMerchantTile(_G["MerchantItem" .. i]) end
-                        SkinMerchantTile(_G.MerchantBuyBackItem)
+                        SkinMerchantGridCards()
                     end
                 end
             end))

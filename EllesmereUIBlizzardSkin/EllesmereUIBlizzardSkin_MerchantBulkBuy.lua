@@ -306,6 +306,7 @@ end
 -- border, close button and edit box, popup buttons in the theme's font.
 local SKIN = {
     frame = function(d)
+        d:SetFrameStrata("FULLSCREEN_DIALOG")
         WSkin.SolidTex(d, "BACKGROUND", Theme.bgR, Theme.bgG, Theme.bgB, 1):SetAllPoints()
         WSkin.AddBorder(d)
     end,
@@ -390,7 +391,7 @@ local function TakeOver(button)
     b.buy._resetAnim()
     b.max._resetAnim()
     b.stack._resetAnim()
-    dialog:Open(button)
+    dialog:Open(button, -2)
     Refresh()
     if dialog:IsShown() then dialog:FocusInput() end
 end

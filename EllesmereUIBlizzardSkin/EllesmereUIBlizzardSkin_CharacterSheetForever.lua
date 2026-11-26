@@ -1003,6 +1003,7 @@ local function BuildSlotHover(slot, bounds)
     end)
     return glow, flash
 end
+ns.ForeverBuildSlotHover = BuildSlotHover
 
 -- Blizzard refreshes every shown slot through this on equipment changes and
 -- on show; the border and the slot text follow. Foreign item buttons (bags)
@@ -1620,6 +1621,7 @@ local function BorderLayer(border)
     if backdrop and backdrop:IsShown() then strata, level = TopLayer(strata, level, backdrop) end
     return strata, level
 end
+ns.ForeverBorderLayer = BorderLayer
 
 local function PaintHorizontalCompanion(line, style, thickness, pixel)
     local pixels = EllesmereUI._pixelArtBorders[style]
@@ -1672,7 +1674,7 @@ function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, hea
         local pixelArt = EllesmereUI._pixelArtBorders[style]
         local geometryStyle = pixelArt and "pixels" or style
         local filter = pixelArt and "NEAREST" or nil
-        local strata, level = BorderLayer(border)
+        local borderStrata, borderLevel = BorderLayer(border)
         if tabClip and not tabClip:IsProtected() then
             local edge = 0
             if style then
@@ -1685,19 +1687,25 @@ function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, hea
             tabClip:SetPoint("TOPLEFT", dock or frame, "TOPRIGHT", edge, 0)
             tabClip:SetPoint("BOTTOMLEFT", dock or frame, "BOTTOMRIGHT", edge, -32)
             if pixelArt then
-                tabClip:SetFrameStrata(strata)
-                tabClip:SetFrameLevel(level + 5)
+                tabClip:SetFrameStrata(borderStrata)
+                tabClip:SetFrameLevel(borderLevel + 5)
             else
                 tabClip:SetFrameStrata(frame:GetFrameStrata())
                 tabClip:SetFrameLevel(frame:GetFrameLevel() + 2)
             end
         end
+        local strata, level = borderStrata, borderLevel
         for _, bg in pairs(backgrounds) do
             strata, level = TopLayer(strata, level, bg:GetParent())
         end
         if dock then strata, level = TopLayer(strata, level, dock) end
-        header:SetFrameStrata(strata)
-        header:SetFrameLevel(level + (dock and 4 or 2))
+        if not style then
+            header:SetFrameStrata(borderStrata)
+            header:SetFrameLevel(borderLevel - 1)
+        else
+            header:SetFrameStrata(strata)
+            header:SetFrameLevel(level + (dock and 4 or 2))
+        end
         if size == 0 then
             horizontal:Hide()
             if vertical then vertical:Hide() end
@@ -1955,10 +1963,7 @@ end
 
 local LIST_INSET, LIST_Y = 20, -8
 
-local function SkinSheetScroll(box, WSkin, nativeArt, fadeContent)
-    local scroll = box and box.ScrollBox
-    local bar = box and box.ScrollBar
-    if not (scroll and bar) then return end
+function ns.ForeverSkinSheetScrollBar(bar, WSkin, nativeArt)
     if not nativeArt then WSkin.ScrollBar(bar) end
     local track = bar.Track
     local thumb = track and track.Thumb
@@ -1991,6 +1996,15 @@ local function SkinSheetScroll(box, WSkin, nativeArt, fadeContent)
         nativeArt(bar.Back)
         nativeArt(bar.Forward)
     end
+    return bg, fill
+end
+
+local function SkinSheetScroll(box, WSkin, nativeArt, fadeContent)
+    local scroll = box and box.ScrollBox
+    local bar = box and box.ScrollBar
+    if not (scroll and bar) then return end
+    local bg, fill = ns.ForeverSkinSheetScrollBar(bar, WSkin, nativeArt)
+    local track = bar.Track
 
     local enabled, stockAlpha = not nativeArt, bar:GetAlpha()
     local function UpdateHover()
