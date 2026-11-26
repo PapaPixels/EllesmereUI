@@ -33,6 +33,7 @@ end
 local MEDIA = "Interface\\AddOns\\EllesmereUIBlizzardSkin\\Media\\"
 local ICONS = "Interface\\AddOns\\EllesmereUI\\media\\icons\\"
 local SIDE_ARROW = ICONS .. "right-arrow.png"
+local SIDE_ARROW_ALPHA = 0.75
 
 ns.ForeverIconZoomDefault = 0.14
 
@@ -1167,6 +1168,15 @@ function ns.ForeverHideSceneArt(scene)
     end
 end
 
+local function CreateSideArrow(button)
+    local arrow = button:CreateTexture(nil, "OVERLAY")
+    arrow:SetSize(12, 12)
+    arrow:SetPoint("CENTER")
+    arrow:SetTexture(SIDE_ARROW)
+    arrow:SetVertexColor(1, 1, 1, SIDE_ARROW_ALPHA)
+    return arrow
+end
+
 local function SkinPaneToggle(frame, WSkin)
     local button, pane = frame.RightPaneToggleButton, frame.LeftPaneHost
     if not (button and pane and frame.IsRightPaneCollapsed and frame.UpdateRightPaneToggleButton)
@@ -1176,11 +1186,7 @@ local function SkinPaneToggle(frame, WSkin)
     button:SetSize(20, 20)
     WSkin.FadeRegions(button)
 
-    local arrow = button:CreateTexture(nil, "OVERLAY")
-    arrow:SetSize(12, 12)
-    arrow:SetPoint("CENTER")
-    arrow:SetTexture(SIDE_ARROW)
-    arrow:SetVertexColor(1, 1, 1, 0.75)
+    local arrow = CreateSideArrow(button)
     local function UpdateArrow()
         button:GetNormalTexture():SetAlpha(0)
         button:GetPushedTexture():SetAlpha(0)
@@ -1192,7 +1198,7 @@ local function SkinPaneToggle(frame, WSkin)
     end
     hooksecurefunc(frame, "UpdateRightPaneToggleButton", UpdateArrow)
     button:HookScript("OnEnter", function() arrow:SetVertexColor(1, 1, 1, 1) end)
-    button:HookScript("OnLeave", function() arrow:SetVertexColor(1, 1, 1, 0.75) end)
+    button:HookScript("OnLeave", function() arrow:SetVertexColor(1, 1, 1, SIDE_ARROW_ALPHA) end)
     UpdateArrow()
 end
 
@@ -1701,7 +1707,8 @@ function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, hea
         if dock then strata, level = TopLayer(strata, level, dock) end
         if not style then
             header:SetFrameStrata(borderStrata)
-            header:SetFrameLevel(borderLevel - 1)
+            -- Leave one level for the vertical seam below the atlas shadow.
+            header:SetFrameLevel(borderLevel - (seam and 2 or 1))
         else
             header:SetFrameStrata(strata)
             header:SetFrameLevel(level + (dock and 4 or 2))
@@ -1763,8 +1770,8 @@ function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, hea
         if color then r, g, b = color.r, color.g, color.b end
         horizontal:SetVertexColor(r, g, b, 1)
         if not seam then return end
-        seam:SetFrameStrata(strata)
-        seam:SetFrameLevel(level + (dock and 5 or 3))
+        seam:SetFrameStrata(header:GetFrameStrata())
+        seam:SetFrameLevel(header:GetFrameLevel() + 1)
         vertical:SetSnapToPixelGrid(not solid)
         if pixelArt then vertical:SetTexelSnappingBias(0) end
         seam:ClearAllPoints()
@@ -2097,6 +2104,7 @@ local function HookEquipmentFlyout(pane, WSkin)
         local direction = source.flyoutDirection or source.popoutButton.flyoutDirection
         local slotEdge, flyoutEdge, point
         local vertical = direction == "UP" or direction == "DOWN"
+        icon:SetRotation(vertical and math.pi / 2 or 0)
         if direction == "LEFT" then
             slotEdge, flyoutEdge, point = source:GetLeft(), anchor:GetRight(), "LEFT"
         elseif direction == "UP" then
@@ -2127,6 +2135,7 @@ local function HookEquipmentFlyout(pane, WSkin)
                     icon = source:CreateTexture(nil, "OVERLAY", nil, 5)
                     icon:SetSize(24, 24)
                     icon:SetTexture(ICONS .. "unlock-center.png")
+                    icon:SetVertexColor(1, 1, 1, SIDE_ARROW_ALPHA)
                     icon:Hide()
                     data.altFlyoutIcon = icon
                 end
@@ -2136,11 +2145,7 @@ local function HookEquipmentFlyout(pane, WSkin)
         if modifierIcon ~= icon then
             if modifierIcon then modifierIcon:Hide() end
             modifierIcon = icon
-            if icon then
-                local accent = EllesmereUI.ELLESMERE_GREEN
-                icon:SetVertexColor(accent.r, accent.g, accent.b)
-                icon:Show()
-            end
+            if icon then icon:Show() end
         end
         if modifierGlow == glow then return end
         if modifierGlow then modifierGlow:Hide() end
@@ -2148,15 +2153,68 @@ local function HookEquipmentFlyout(pane, WSkin)
         if glow then glow:Show() end
     end
 
+    local function IsArrowClickable(button)
+        return button:IsEnabled() and button:IsMouseClickEnabled()
+    end
+
+    local function UpdateArrowFeedback(button, hovered)
+        local clickable = IsArrowClickable(button)
+        hovered = clickable and hovered
+        arrows[button].art:SetVertexColor(1, 1, 1, hovered and 1 or (clickable and SIDE_ARROW_ALPHA or 0.30))
+    end
+
+    local function PlayArrowPulse(button)
+        local entry = arrows[button]
+        if not entry.animation then
+            local animation = entry.art:CreateAnimationGroup()
+            local grow = animation:CreateAnimation("Scale")
+            grow:SetScaleFrom(1, 1)
+            grow:SetScaleTo(1.18, 1.18)
+            grow:SetDuration(0.08)
+            grow:SetOrder(1)
+            local settle = animation:CreateAnimation("Scale")
+            settle:SetScaleFrom(1.18, 1.18)
+            settle:SetScaleTo(1, 1)
+            settle:SetDuration(0.12)
+            settle:SetOrder(2)
+            entry.animation = animation
+        else
+            entry.animation:Stop()
+        end
+        entry.animation:Play()
+    end
+
+    local function OnArrowClick(button)
+        if not (arrowsShown and button:IsVisible() and IsArrowClickable(button)) then return end
+        local source = flyout.button
+        if not (source and source.popoutButton == button and flyout:IsVisible() and flyout.buttons) then return end
+        for _, tile in ipairs(flyout.buttons) do
+            if tile:IsVisible() then
+                PlayArrowPulse(button)
+                return
+            end
+        end
+    end
+
+    local function StopArrowPulse(button)
+        local animation = arrows[button].animation
+        if animation then animation:Stop() end
+    end
+
+    local function RefreshArrowFeedback(button)
+        if arrowsShown then UpdateArrowFeedback(button, button:IsMouseMotionFocus()) end
+    end
+
+    local function ClearArrowFeedback(button)
+        if arrowsShown then UpdateArrowFeedback(button, false) end
+    end
+
     for _, name in ipairs(SLOTS) do
         local slot = _G[name]
         local button = slot and slot.popoutButton
         if button and not button:IsProtected() then
             sources[slot] = true
-            local icon = button:CreateTexture(nil, "OVERLAY")
-            icon:SetSize(12, 12)
-            icon:SetPoint("CENTER")
-            icon:SetTexture(SIDE_ARROW)
+            local icon = CreateSideArrow(button)
             local direction = slot.flyoutDirection or button.flyoutDirection
             local x, y = 0, 0
             if direction == "LEFT" then
@@ -2172,6 +2230,13 @@ local function HookEquipmentFlyout(pane, WSkin)
                 x = -2
             end
             arrows[button] = { art = icon, point = { button:GetPoint() }, x = x, y = y }
+            button:HookScript("OnEnter", RefreshArrowFeedback)
+            button:HookScript("OnLeave", ClearArrowFeedback)
+            button:HookScript("OnClick", OnArrowClick)
+            button:HookScript("OnHide", StopArrowPulse)
+            button:HookScript("OnEnable", RefreshArrowFeedback)
+            button:HookScript("OnDisable", ClearArrowFeedback)
+            hooksecurefunc(button, "SetMouseClickEnabled", RefreshArrowFeedback)
         end
     end
 
@@ -2188,6 +2253,7 @@ local function HookEquipmentFlyout(pane, WSkin)
 
     local function SkinArrow(button)
         HideArrowTextures(button:GetNormalTexture(), button:GetPushedTexture(), button:GetHighlightTexture())
+        RefreshArrowFeedback(button)
     end
 
     -- The popout reassigns its atlases on click, hover and lock changes.
@@ -2418,16 +2484,7 @@ local function HookEquipmentFlyout(pane, WSkin)
         end
     end)
 
-    local function TintArrows()
-        local accent = EllesmereUI.ELLESMERE_GREEN
-        for _, entry in pairs(arrows) do entry.art:SetVertexColor(accent.r, accent.g, accent.b) end
-    end
     EllesmereUI.RegAccent({ type = "callback", fn = function()
-        if arrowsShown then TintArrows() end
-        if modifierIcon then
-            local accent = EllesmereUI.ELLESMERE_GREEN
-            modifierIcon:SetVertexColor(accent.r, accent.g, accent.b)
-        end
         if enabled and flyout:IsShown() then PaintFlyout(false) end
     end })
 
@@ -2440,7 +2497,6 @@ local function HookEquipmentFlyout(pane, WSkin)
         local show = on and pane:IsVisible()
         if arrowsShown ~= show then
             arrowsShown = show
-            if show then TintArrows() end
             for button, entry in pairs(arrows) do
                 entry.art:SetShown(show)
                 local point = entry.point
@@ -2448,7 +2504,11 @@ local function HookEquipmentFlyout(pane, WSkin)
                     button:SetPoint(point[1], point[2], point[3],
                         (point[4] or 0) + (show and entry.x or 0), (point[5] or 0) + (show and entry.y or 0))
                 end
-                if show then SkinArrow(button) end
+                if show then
+                    SkinArrow(button)
+                else
+                    StopArrowPulse(button)
+                end
             end
             if not show then
                 for texture, alpha in pairs(arrowAlpha) do texture:SetAlpha(alpha) end
@@ -2608,9 +2668,11 @@ local function HookEquipmentSkin(WSkin, sheet)
     local function Paint(surface)
         surface.host:SetShown(active)
         surface.fill:SetShown(active)
+        local footerDivider = surface.footerDivider
         -- The mask owner must contain both the background and the hover textures.
         local maskOwner = surface.row or surface.button or surface.host
         if not active then
+            if footerDivider then footerDivider:Hide() end
             EllesmereUI.RoundCorners(maskOwner, 0)
             if surface.icon then EllesmereUI.RoundAuraCorners(maskOwner, surface, surface.icon, nil, false, 0) end
             return
@@ -2627,6 +2689,17 @@ local function HookEquipmentSkin(WSkin, sheet)
         surface.pixelBorder = surface.button and EllesmereUI._pixelArtBorders[style] and border or nil
         surface.pixelBorderColor = surface.pixelBorder and color or nil
         PaintButtonBorderState(surface)
+        if footerDivider then
+            local show = border ~= nil and (not style or style == "solid")
+            if show then
+                local pixel = OnePixel(pane)
+                footerDivider:SetPoint("LEFT", surface.button, "TOPLEFT", pixel, 12)
+                footerDivider:SetPoint("RIGHT", surface.button, "TOPRIGHT", pixel, 12)
+                footerDivider:SetHeight(pixel)
+                footerDivider:SetColorTexture(color.r, color.g, color.b, 1)
+            end
+            footerDivider:SetShown(show)
+        end
         if not border then return end
         local radius = style and not surface.square and db.blizzWinCornerRadius or 0
         EllesmereUI.RoundCorners(maskOwner, radius, {
@@ -2998,31 +3071,10 @@ local function HookEquipmentSkin(WSkin, sheet)
             for _, art in ipairs({ pane:GetRegions() }) do
                 if art.GetAtlas and art:GetAtlas() == "UI-Character-Info-ScrollLine" then SaveArt(art) end
             end
-            local glow = {}
-            local pixel = OnePixel(pane)
-            for i = 1, 2 do
-                local left = pane:CreateTexture(nil, "ARTWORK")
-                local right = pane:CreateTexture(nil, "ARTWORK")
-                left:SetPoint("LEFT", button, "TOPLEFT", 0, 12)
-                left:SetPoint("RIGHT", button, "TOP", 0, 12)
-                right:SetPoint("LEFT", button, "TOP", 0, 12)
-                right:SetPoint("RIGHT", button, "TOPRIGHT", 0, 12)
-                for _, line in ipairs({ left, right }) do
-                    line:SetHeight((i == 1 and 3 or 1) * pixel)
-                    line:SetColorTexture(1, 1, 1, 1)
-                    extras[#extras + 1] = line
-                end
-                glow[i] = { left, right }
-            end
+            newSet.footerDivider = pane:CreateTexture(nil, "ARTWORK")
             local function TintNewSet()
                 local accent = EllesmereUI.ELLESMERE_GREEN
                 for _, line in ipairs(plus) do line:SetVertexColor(accent.r, accent.g, accent.b) end
-                local clear = CreateColor(accent.r, accent.g, accent.b, 0)
-                for i, pair in ipairs(glow) do
-                    local center = CreateColor(accent.r, accent.g, accent.b, i == 1 and 0.10 or 0.60)
-                    pair[1]:SetGradient("HORIZONTAL", clear, center)
-                    pair[2]:SetGradient("HORIZONTAL", center, clear)
-                end
                 if active and newSet.font then newSet.font() end
             end
             TintNewSet()
