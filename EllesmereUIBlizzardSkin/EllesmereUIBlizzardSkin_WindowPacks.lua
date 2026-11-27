@@ -9019,26 +9019,19 @@ local function AlignMerchantMoney()
     money:SetPoint("BOTTOMRIGHT", inset, "BOTTOMRIGHT", 8, 5)
 end
 
-local function BuildMerchantTabs(frame)
-    local tabs = {}
-    for i = 1, 2 do
-        local tab = _G["MerchantFrameTab" .. i]
-        if tab then
-            WSkin.Tab(tab)
-            tabs[#tabs + 1] = tab
-        end
-    end
-    WSkin.NormalizeTabRow(tabs)
+function ns.ForeverBottomTabBorders(frame, tabs, opts)
     local first = tabs[1]
-    if not EllesmereUI.IS_FOREVER or not first then return end
-
-    local firstPoint = { first:GetPoint(1) }
+    if not first then return end
+    local keepLayout = opts and opts.keepLayout
+    local goldText = not (opts and opts.whiteActiveText)
+    local firstPoint = not keepLayout and { first:GetPoint(1) }
     local art = {}
     local gold = { r = 1, g = 0.75, b = 0.24 }
     local windowBorder, style, size, key, borderColor, px, alpha
     local goldOpacity = 0.95
     local goldColor = CreateColor(gold.r, gold.g, gold.b, goldOpacity)
     local pixelTabs
+    local painted = {}
     local function Layout()
         if InCombatLockdown() then
             ns.CombatQueue.Defer(first, Layout)
@@ -9053,32 +9046,51 @@ local function BuildMerchantTabs(frame)
                 art[tab].clip:Hide()
                 WSkin.Tab(tab)
             end
-            first:ClearAllPoints()
-            first:SetPoint(unpack(firstPoint))
-            WSkin.NormalizeTabRow(tabs)
+            if not keepLayout then
+                first:ClearAllPoints()
+                first:SetPoint(unpack(firstPoint))
+                WSkin.NormalizeTabRow(tabs)
+            end
             return
         end
-        if not pixelTabs then EllesmereUI.RegisterPxReapply(first, Layout) end
-        pixelTabs = true
-
         local pp = EllesmereUI.PP
         local db = EllesmereUIDB
         local es = frame:GetEffectiveScale()
         local pixel = pp.perfect / es
+        local requestedStyle = db.blizzWinBorderTexture
+        local offsetX, offsetY = db.blizzWinBorderOffsetX, db.blizzWinBorderOffsetY
+        local shiftX, shiftY = db.blizzWinBorderShiftX, db.blizzWinBorderShiftY
         local left, right, _, bottom = EllesmereUI.BorderReach(size, style,
-            db.blizzWinBorderOffsetX, db.blizzWinBorderOffsetY, db.blizzWinBorderShiftX, db.blizzWinBorderShiftY,
+            offsetX, offsetY, shiftX, shiftY,
             "blizzardSkin", key, px, nil, alpha, es)
-        local edge, _, offsetY, _, shiftY = EllesmereUI.BorderPlacement(size, style,
-            db.blizzWinBorderOffsetX, db.blizzWinBorderOffsetY, db.blizzWinBorderShiftX, db.blizzWinBorderShiftY,
+        local edge, _, borderOffsetY, _, borderShiftY = EllesmereUI.BorderPlacement(size, style,
+            offsetX, offsetY, shiftX, shiftY,
             "blizzardSkin", key, px, nil, es)
-        local gap = math.max(6, pp.SnapForES(math.max(0, left or 0) + math.max(0, right or 0) + 2 * pixel, es))
-        local overlap = db.blizzWinBorderTexture == "pixels" and pixel or 2 * pixel
+        local overlap = requestedStyle == "pixels" and pixel or 2 * pixel
         local seam = overlap - pp.SnapForES(bottom or 0, es)
-        local tabTop = math.max(0, seam)
-        local clipTop = seam - tabTop
-        local rimTop = clipTop + edge - offsetY - shiftY
+        local clipTop = math.min(0, seam)
+        local rimTop = clipTop + edge - borderOffsetY - borderShiftY
         local margin = edge + math.max(math.abs(left or 0), math.abs(right or 0), math.abs(bottom or 0))
         local strata, level = ns.ForeverBorderLayer(windowBorder)
+        local repaint = not pixelTabs or painted.style ~= requestedStyle or painted.texture ~= style
+            or painted.size ~= size or painted.key ~= key or painted.px ~= px
+            or painted.scale ~= es or painted.ppMult ~= pp.mult
+            or painted.offsetX ~= offsetX or painted.offsetY ~= offsetY or painted.shiftX ~= shiftX or painted.shiftY ~= shiftY
+            or painted.level ~= level or painted.behind ~= db.blizzWinBorderBehind
+            or painted.r ~= borderColor.r or painted.g ~= borderColor.g or painted.b ~= borderColor.b
+        if repaint then
+            painted.style, painted.texture, painted.size, painted.key, painted.px = requestedStyle, style, size, key, px
+            painted.scale, painted.ppMult, painted.level, painted.behind = es, pp.mult, level, db.blizzWinBorderBehind
+            painted.offsetX, painted.offsetY, painted.shiftX, painted.shiftY = offsetX, offsetY, shiftX, shiftY
+            painted.r, painted.g, painted.b = borderColor.r, borderColor.g, borderColor.b
+        end
+        if not pixelTabs then EllesmereUI.RegisterPxReapply(first, Layout) end
+        pixelTabs = true
+        local gap, tabTop
+        if not keepLayout then
+            gap = math.max(6, pp.SnapForES(math.max(0, left or 0) + math.max(0, right or 0) + 2 * pixel, es))
+            tabTop = math.max(0, seam)
+        end
         local prev
         for _, tab in ipairs(tabs) do
             local state = art[tab]
@@ -9093,7 +9105,7 @@ local function BuildMerchantTabs(frame)
                     if not pixelTabs then return end
                     local d = GetFFD(tab)
                     d.activeHL:Hide()
-                    if selected then d.label:SetTextColor(gold.r, gold.g, gold.b, 1) end
+                    if selected and goldText then d.label:SetTextColor(gold.r, gold.g, gold.b, 1) end
                     if state.selected == selected then return end
                     if InCombatLockdown() then
                         ns.CombatQueue.Defer(state.rim, function() WSkin.Tab(tab) end)
@@ -9119,13 +9131,15 @@ local function BuildMerchantTabs(frame)
                     if backdrop.RightEdge then backdrop.RightEdge:SetGradient("VERTICAL", bottom, top) end
                 end }
             end
-            tab:ClearAllPoints()
-            if prev then
-                tab:SetPoint("TOPLEFT", prev, "TOPRIGHT", gap, 0)
-            else
-                tab:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 12, tabTop)
+            if not keepLayout then
+                tab:ClearAllPoints()
+                if prev then
+                    tab:SetPoint("TOPLEFT", prev, "TOPRIGHT", gap, 0)
+                else
+                    tab:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", 12, tabTop)
+                end
+                prev = tab
             end
-            prev = tab
             state.clip:SetFrameStrata(strata)
             state.clip:SetFrameLevel(level + 1)
             state.rim:SetFrameLevel(level + 2)
@@ -9134,15 +9148,30 @@ local function BuildMerchantTabs(frame)
             -- The side strips start at the join, with the top edge and corners clipped.
             state.rim:SetPoint("TOPLEFT", tab, "TOPLEFT", 0, rimTop)
             state.rim:SetPoint("BOTTOMRIGHT", tab, "BOTTOMRIGHT")
-            state.selected = nil
             state.clip:Show()
-            WSkin.Tab(tab, tabOptions)
+            if repaint or tabOptions then
+                state.selected = nil
+                WSkin.Tab(tab, tabOptions)
+            end
         end
     end
     return function(border, texture, borderSize, sizeKey, color, edgePx, _, opacity)
         windowBorder, style, size, key, borderColor, px, alpha = border, texture, borderSize, sizeKey, color, edgePx, opacity
         Layout()
     end
+end
+
+local function BuildMerchantTabs(frame)
+    local tabs = {}
+    for i = 1, 2 do
+        local tab = _G["MerchantFrameTab" .. i]
+        if tab then
+            WSkin.Tab(tab)
+            tabs[#tabs + 1] = tab
+        end
+    end
+    WSkin.NormalizeTabRow(tabs)
+    if EllesmereUI.IS_FOREVER then return ns.ForeverBottomTabBorders(frame, tabs) end
 end
 
 local _merchantHooked = false

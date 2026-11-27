@@ -375,6 +375,7 @@ function WSkin.SetWindowBorderDock(frame, dock)
         d.windowUndockedLevel = nil
     end
     PaintWindowBorder(host, d)
+    return true
 end
 
 function WSkin.IsEmbeddedDropdownMenu(menu)
@@ -1707,11 +1708,23 @@ local function TabIsSelected(tab)
     return false
 end
 
+local function PaintTabLabel(d, selected)
+    if d.label then d.label:SetTextColor(1, 1, 1, (selected or d.labelHovered) and 1 or 0.5) end
+end
+
+function WSkin.SetTabLabelHovered(tab, hovered)
+    local d = FFD[tab]
+    if not (d and d.label) or d.labelHovered == hovered then return end
+    d.labelHovered = hovered
+    d.label:SetAlpha(hovered and 1 or 0.90)
+    PaintTabLabel(d, TabIsSelected(tab))
+end
+
 local function UpdateTabVisual(tab)
     local d = FFD[tab]
     if not d or not d.underline then return end
     local sel = TabIsSelected(tab)
-    if d.label then d.label:SetTextColor(1, 1, 1, sel and 1 or 0.5) end
+    PaintTabLabel(d, sel)
     d.underline:SetShown(sel and WSkin.AccentBarShown())
     -- darkActive tabs deepen the fill when selected instead of the additive
     -- lighten wash.
@@ -1805,7 +1818,7 @@ function WSkin.Tab(tab, opts)
     d.activeHL = activeHL
 
     local blizLabel = tab.Text or (tab.GetFontString and tab:GetFontString())
-    local labelText = (blizLabel and blizLabel.GetText and blizLabel:GetText()) or ""
+    local labelText = (opts and opts.text) or (blizLabel and blizLabel.GetText and blizLabel:GetText()) or ""
     if blizLabel and blizLabel.SetTextColor then blizLabel:SetTextColor(0, 0, 0, 0) end
     if tab.SetPushedTextOffset then tab:SetPushedTextOffset(0, 0) end
 
@@ -1824,7 +1837,7 @@ function WSkin.Tab(tab, opts)
             d.label:SetText(d.blizLabel:GetText() or "")
         end
     end
-    hooksecurefunc(tab, "SetText", SyncLabel)
+    if tab.SetText then hooksecurefunc(tab, "SetText", SyncLabel) end
     if blizLabel then
         hooksecurefunc(blizLabel, "SetText", SyncLabel)
         if blizLabel.SetFormattedText then hooksecurefunc(blizLabel, "SetFormattedText", SyncLabel) end
@@ -1850,9 +1863,11 @@ function WSkin.Tab(tab, opts)
     EnsureTabHooks()
     -- TabSystem buttons do not flow through PanelTemplates_SetTab; refresh all
     -- skinned tabs one frame after any tab click.
-    tab:HookScript("OnClick", function()
-        if C_Timer then C_Timer.After(0, UpdateAllTabs) else UpdateAllTabs() end
-    end)
+    if tab:IsObjectType("Button") then
+        tab:HookScript("OnClick", function()
+            if C_Timer then C_Timer.After(0, UpdateAllTabs) else UpdateAllTabs() end
+        end)
+    end
     UpdateTabVisual(tab)
 end
 

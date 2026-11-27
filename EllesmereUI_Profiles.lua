@@ -2284,7 +2284,7 @@ do
         "statCategoryColors", "statCategoryUseColor", "statSectionsOrder",
         "showMythicRating", "showItemLevel", "showUpgradeTrack", "showGems",
         "showEnchants", "showPvpItemLevel", "charSheetSocketPanel", "charSheetSeasonPanel", "charSheetSeasonVault",
-        "charSheetHideSlotFlyoutArrows",
+        "charSheetHideSlotFlyoutArrows", "charSheetBottomTabs",
         "charSheetIconZoom", "charSheetEnchantNames", "charSheetEnchantSize",
         "flyoutItemLevels", "flyoutItemStats", "charSheetItemStats",
         "flyoutItemStatsTertiary", "charSheetItemStatsTertiary", "charSheetSocketPanelStats",

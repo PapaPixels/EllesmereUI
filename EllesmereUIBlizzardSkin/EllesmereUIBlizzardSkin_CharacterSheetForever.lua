@@ -228,13 +228,23 @@ end
 --------------------------------------------------------------------------------
 --  The frame
 --------------------------------------------------------------------------------
-local SLOTS = {
-    "CharacterHeadSlot", "CharacterNeckSlot", "CharacterShoulderSlot", "CharacterBackSlot",
-    "CharacterChestSlot", "CharacterShirtSlot", "CharacterTabardSlot", "CharacterWristSlot",
-    "CharacterHandsSlot", "CharacterWaistSlot", "CharacterLegsSlot", "CharacterFeetSlot",
-    "CharacterFinger0Slot", "CharacterFinger1Slot", "CharacterTrinket0Slot", "CharacterTrinket1Slot",
-    "CharacterMainHandSlot", "CharacterSecondaryHandSlot", "CharacterRangedSlot", "CharacterAmmoSlot",
+local SLOT_COLUMNS = {
+    { anchor = "LEFT",
+        "CharacterHeadSlot", "CharacterNeckSlot", "CharacterShoulderSlot", "CharacterBackSlot",
+        "CharacterChestSlot", "CharacterShirtSlot", "CharacterTabardSlot", "CharacterWristSlot",
+    },
+    { anchor = "RIGHT",
+        "CharacterHandsSlot", "CharacterWaistSlot", "CharacterLegsSlot", "CharacterFeetSlot",
+        "CharacterFinger0Slot", "CharacterFinger1Slot", "CharacterTrinket0Slot", "CharacterTrinket1Slot",
+    },
+    { anchor = "BOTTOM",
+        "CharacterMainHandSlot", "CharacterSecondaryHandSlot", "CharacterRangedSlot", "CharacterAmmoSlot",
+    },
 }
+local SLOTS = {}
+for _, column in ipairs(SLOT_COLUMNS) do
+    for _, name in ipairs(column) do SLOTS[#SLOTS + 1] = name end
+end
 
 -- Use the paper doll's left inset on all three edges and mirror its slot anchors in Inspect.
 local function LayoutGearSlots(frame, inspect)
@@ -1111,10 +1121,34 @@ local function DressSlot(slot, slotName, Fade, inspectUnit)
     end
 end
 
-local function SkinSlot(slotName, Fade)
+local function SkinSlot(slotName, Fade, tooltipAnchor)
     local slot = _G[slotName]
     if not slot then return end
     DressSlot(slot, slotName, Fade)
+    GetFFD(slot).tooltipAnchor = tooltipAnchor
+end
+
+local function AnchorSlotTooltip(slot, tooltip)
+    local d = FFD[slot]
+    local anchor = d and d.tooltipAnchor
+    if not anchor or tooltip ~= GameTooltip or tooltip:IsForbidden() then return end
+    if not tooltip:IsOwned(slot) then
+        local flyout = _G.EquipmentFlyoutFrame
+        if not (flyout and flyout.button == slot and flyout.buttonFrame
+            and tooltip:IsOwned(flyout.buttonFrame)) then return end
+    end
+
+    -- The flyout can own the tooltip, but its position still comes from the slot.
+    local offset = 5 * OnePixel(tooltip)
+    tooltip:SetAnchorType("ANCHOR_NONE")
+    tooltip:ClearAllPoints()
+    if anchor == "BOTTOM" then
+        tooltip:SetPoint("TOP", slot, "BOTTOM", 0, -offset)
+    elseif anchor == "RIGHT" then
+        tooltip:SetPoint("LEFT", slot, "RIGHT", offset, 0)
+    else
+        tooltip:SetPoint("RIGHT", slot, "LEFT", -offset, 0)
+    end
 end
 
 local inspectSlotHooked
@@ -1266,6 +1300,20 @@ function ns.ForeverSkinClose(close, topBar)
     end
 end
 
+local function OwnedSheetTooltip(owner)
+    local tooltip = GameTooltip
+    if tooltip and not tooltip:IsForbidden() and tooltip:IsOwned(owner) then return tooltip end
+end
+
+local function ShowSheetTooltip(owner, text, errorText)
+    local tooltip = GameTooltip
+    if not (text and tooltip) or tooltip:IsForbidden() then return end
+    GameTooltip_SetDefaultAnchor(tooltip, owner)
+    GameTooltip_SetTitle(tooltip, text)
+    if errorText then GameTooltip_AddErrorLine(tooltip, errorText, true) end
+    tooltip:Show()
+end
+
 function ns.ForeverBuildItemTextEye(items, topBar, overlay, ilvlOverlay, field)
     local character = field and EllesmereUI.CharEntry()
     local hidden = character and character[field] == true
@@ -1281,19 +1329,21 @@ function ns.ForeverBuildItemTextEye(items, topBar, overlay, ilvlOverlay, field)
         overlay:SetAlpha(hidden and 0 or 1)
         ilvlOverlay:SetAlpha(hidden and 0 or 1)
     end
-    local tooltipOpts = { anchor = "right" }
+    local showText = EllesmereUI.L("Show Item Text")
+    local hideText = EllesmereUI.L("Hide Item Text")
     local function ShowTooltip(self)
-        EllesmereUI.ShowWidgetTooltip(self, hidden and "Show Item Text" or "Hide Item Text", tooltipOpts)
+        ShowSheetTooltip(self, hidden and showText or hideText)
     end
     local function HideTooltip(self)
-        if EllesmereUI._WidgetTooltipOwner() == self then EllesmereUI.HideWidgetTooltip() end
+        local tooltip = OwnedSheetTooltip(self)
+        if tooltip then tooltip:Hide() end
     end
     button:SetScript("OnClick", function(self)
         hidden = not hidden
         local entry = field and EllesmereUI.CharEntry(true)
         if entry then entry[field] = hidden end
         Apply()
-        if EllesmereUI._WidgetTooltipOwner() == self then ShowTooltip(self) end
+        if OwnedSheetTooltip(self) then ShowTooltip(self) end
     end)
     button:SetScript("OnEnter", ShowTooltip)
     button:SetScript("OnLeave", HideTooltip)
@@ -1613,6 +1663,192 @@ local function BuildModeTabSkin(frame, WSkin, inspect)
     end, host
 end
 
+function ns.ForeverBottomTabsSupported(style)
+    return style ~= "glow" and style ~= "shadow"
+end
+
+local bottomTabsInstalled
+local function WantsBottomTabs()
+    return EllesmereUIDB ~= nil and EllesmereUIDB.charSheetBottomTabs == true
+        and ns.ForeverBottomTabsSupported(EllesmereUIDB.blizzWinBorderTexture)
+end
+
+function ns.ForeverBottomTabsNeedReload()
+    return bottomTabsInstalled ~= nil and Enabled() and bottomTabsInstalled ~= WantsBottomTabs()
+end
+
+local BOTTOM_TAB_GROWTH = 0.10
+
+local function SetBottomTabBounceTiming(press, release)
+    press:SetDuration(0.065)
+    press:SetSmoothing("OUT")
+    press:SetOrder(1)
+    release:SetDuration(0.12)
+    release:SetSmoothing("IN_OUT")
+    release:SetOrder(2)
+end
+
+local function AddBottomTabBounce(animation, target, point, y)
+    local press = animation:CreateAnimation("Scale")
+    press:SetTarget(target)
+    press:SetOrigin(point, 0, y)
+    press:SetScaleFrom(1, 1)
+    press:SetScaleTo(1, 1 + BOTTOM_TAB_GROWTH)
+    local release = animation:CreateAnimation("Scale")
+    release:SetTarget(target)
+    release:SetOrigin(point, 0, y)
+    release:SetScaleFrom(1, 1 + BOTTOM_TAB_GROWTH)
+    release:SetScaleTo(1, 1)
+    SetBottomTabBounceTiming(press, release)
+end
+
+local function BuildBottomTabFeedback(tab, WSkin, art)
+    local animation = tab:CreateAnimationGroup()
+    AddBottomTabBounce(animation, tab, "TOP", 0)
+    local accentBounce, playing
+    local function StopBounce()
+        if playing then playing:Stop() end
+    end
+    WSkin.SetTabLabelHovered(tab, false)
+
+    tab:HookScript("OnEnter", function(self)
+        WSkin.SetTabLabelHovered(self, true)
+        local tooltip = OwnedSheetTooltip(self)
+        if tooltip and tooltip:IsShown() then ShowSheetTooltip(self, self.tooltipText) end
+    end)
+    tab:HookScript("OnLeave", function(self) WSkin.SetTabLabelHovered(self, false) end)
+    tab:HookScript("OnMouseUp", function(self, button, upInside)
+        if button ~= "LeftButton" or not upInside or not self:IsVisible() then return end
+        StopBounce()
+        playing = animation
+        if art.underline:IsShown() then
+            if not accentBounce then
+                accentBounce = tab:CreateAnimationGroup()
+                local height = tab:GetHeight()
+                AddBottomTabBounce(accentBounce, art.bg, "TOP", 0)
+                AddBottomTabBounce(accentBounce, art.activeHL, "TOP", 0)
+                AddBottomTabBounce(accentBounce, art.label, "CENTER", height / 2)
+                -- Move the underline with the edge without scaling its stroke.
+                local distance = height * BOTTOM_TAB_GROWTH
+                local down = accentBounce:CreateAnimation("Translation")
+                down:SetTarget(art.underline)
+                down:SetOffset(0, -distance)
+                local up = accentBounce:CreateAnimation("Translation")
+                up:SetTarget(art.underline)
+                up:SetOffset(0, distance)
+                SetBottomTabBounceTiming(down, up)
+            end
+            playing = accentBounce
+        end
+        playing:Play()
+    end)
+    tab:HookScript("OnHide", function(self)
+        WSkin.SetTabLabelHovered(self, false)
+        StopBounce()
+    end)
+end
+
+local function BuildBottomModeTabs(frame, WSkin)
+    local host = frame.ModeTabs
+    local tabs = host and host.Tabs
+    if not (tabs and tabs[1] and frame.UpdateTabLayout) or host:IsForbidden() or host:IsProtected() then return end
+    for _, tab in ipairs(tabs) do
+        if tab:IsForbidden() or tab:IsProtected() then return end
+    end
+
+    local inset, height = 12, 30
+    local labelSizes = {}
+    local pixelBorders = WSkin.UsesPixelBorders()
+    local function Layout()
+        if InCombatLockdown() then
+            ns.CombatQueue.Defer(host, Layout)
+            return
+        end
+        if host:IsForbidden() or host:IsProtected() then return end
+        local count, textWidth, paddingWidth = 0, 0, 0
+        for i, tab in ipairs(tabs) do
+            if tab:IsForbidden() or tab:IsProtected() then return end
+            if tab:IsShown() then
+                local size = labelSizes[i]
+                count = count + 1
+                textWidth = textWidth + size.text
+                paddingWidth = paddingWidth + size.padding
+            end
+        end
+        if count == 0 then return end
+
+        local pixel = OnePixel(frame)
+        local gap = pixelBorders and (6 + pixel) or pixel
+        local rightTrim = 2 * pixel
+        local available = frame:GetWidth() - 2 * inset - (count - 1) * gap - paddingWidth
+        local fit = math.min(1, math.max(count, available) / math.max(count, textWidth))
+        local x = 0
+        for i, tab in ipairs(tabs) do
+            if tab:IsShown() then
+                local size = labelSizes[i]
+                local labelWidth = math.max(1, size.text * fit)
+                local width = math.max(1, size.padding + labelWidth - rightTrim)
+                if tab:GetWidth() ~= width then tab:SetWidth(width) end
+                if size.label:GetWidth() ~= labelWidth then size.label:SetWidth(labelWidth) end
+                local point, relative, relativePoint, offset, y = tab:GetPoint(1)
+                if tab:GetNumPoints() ~= 1 or point ~= "TOPLEFT" or relative ~= host
+                    or relativePoint ~= "TOPLEFT" or offset ~= x or y ~= 0 then
+                    tab:ClearAllPoints()
+                    tab:SetPoint("TOPLEFT", host, "TOPLEFT", x, 0)
+                end
+                x = x + width + gap
+            end
+        end
+    end
+
+    -- Keep the native mouse handlers, tooltips and gamepad tab targets.
+    for i, tab in ipairs(tabs) do
+        WSkin.FadeRegions(tab)
+        WSkin.Tab(tab, { text = tab == host.PvPTab and "PvP" or tab.tooltipText or "" })
+        local art = WSkin.GetFFD(tab)
+        local label = art.label
+        label:SetWordWrap(false)
+        local padding = math.max(0, (height - label:GetStringHeight()) / 2)
+        labelSizes[i] = { label = label, text = label:GetStringWidth(), padding = 2 * padding }
+        label:ClearAllPoints()
+        label:SetPoint("LEFT", tab, "LEFT", padding, 0)
+        label:SetJustifyH("LEFT")
+        label:SetJustifyV("MIDDLE")
+        tab:SetHeight(height)
+        BuildBottomTabFeedback(tab, WSkin, art)
+        local selected = tab.SelectedTexture:IsShown()
+        WSkin.SetTabSelection(tab, selected)
+        hooksecurefunc(tab, "SetChecked", function(self, checked)
+            if checked == selected then return end
+            selected = checked
+            WSkin.SetTabSelection(self, checked)
+        end)
+    end
+
+    host:ClearAllPoints()
+    host:SetPoint("TOPLEFT", frame, "BOTTOMLEFT", inset, 0)
+    host:SetPoint("TOPRIGHT", frame, "BOTTOMRIGHT", -inset, 0)
+    host:SetHeight(height)
+    hooksecurefunc(frame, "UpdateTabLayout", Layout)
+    host:HookScript("OnSizeChanged", Layout)
+    host:HookScript("OnShow", function()
+        Layout()
+        EllesmereUI.RegisterPxReapply(host, Layout)
+    end)
+    host:HookScript("OnHide", function() EllesmereUI.RegisterPxReapply(host, nil) end)
+    if host:IsVisible() then EllesmereUI.RegisterPxReapply(host, Layout) end
+    Layout()
+    local paintBorders = ns.ForeverBottomTabBorders(frame, tabs, { keepLayout = true, whiteActiveText = true })
+    return function(...)
+        local pixelArt = WSkin.UsesPixelBorders()
+        if pixelBorders ~= pixelArt then
+            pixelBorders = pixelArt
+            Layout()
+        end
+        paintBorders(...)
+    end
+end
+
 local function TopLayer(strata, level, owner)
     local layer = owner:GetFrameStrata()
     if (STRATA_ORDER[layer] or 0) > (STRATA_ORDER[strata] or 0) then strata = layer end
@@ -1646,7 +1882,7 @@ local function PaintHorizontalCompanion(line, style, thickness, pixel)
 end
 
 local accentBorderHooked
-function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, headerOnly)
+function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, headerOnly, bottomTabs)
     local right = not headerOnly and frame.RightPaneHost
     if not topBar then return end
     if not accentBorderHooked then
@@ -1665,7 +1901,7 @@ function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, hea
     local vertical = seam and seam:CreateTexture(nil, "OVERLAY")
     local backgrounds = { modelBg, sidebarBg }
     local skinModeTabs, tabClip
-    if not headerOnly then skinModeTabs, tabClip = BuildModeTabSkin(frame, ns.WSkin, inspect) end
+    if not (headerOnly or bottomTabs) then skinModeTabs, tabClip = BuildModeTabSkin(frame, ns.WSkin, inspect) end
 
     local border, style, size, key, color, px, dock
     local dockSeam, dockLine
@@ -1800,8 +2036,8 @@ function ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, inspect, hea
                 dockSeam = CreateFrame("Frame", nil, frame)
                 dockLine = dockSeam:CreateTexture(nil, "OVERLAY")
             end
-            dockSeam:SetFrameStrata(strata)
-            dockSeam:SetFrameLevel(level + 3)
+            dockSeam:SetFrameStrata(style and strata or borderStrata)
+            dockSeam:SetFrameLevel(style and level + 3 or borderLevel - 1)
             dockSeam:SetWidth(thick)
             dockSeam:ClearAllPoints()
             local offset = 0
@@ -1895,17 +2131,10 @@ local function SkinPaperDollHeader(WSkin, modelBg, sidebarBg, fontSize)
     local gap = 10
     local function Paint(entry)
         local tab, label, underline = entry.tab, entry.label, entry.underline
-        local accent = EllesmereUI.ELLESMERE_GREEN
-        local selected = tab:IsEnabled() and tab:GetChecked() and accent ~= nil
+        local enabled = tab:IsEnabled()
+        local selected = enabled and tab:GetChecked()
         underline:SetShown(selected == true)
-        if not tab:IsEnabled() then
-            label:SetTextColor(1, 1, 1, 0.28)
-        elseif selected then
-            label:SetTextColor(accent.r, accent.g, accent.b, 1)
-            underline:SetColorTexture(accent.r, accent.g, accent.b, 1)
-        else
-            label:SetTextColor(1, 1, 1, tab:IsMouseOver() and 1 or 0.6)
-        end
+        label:SetTextColor(1, 1, 1, enabled and ((selected or tab:IsMouseOver()) and 1 or 0.45) or 0.28)
     end
     local function Sync()
         for _, entry in ipairs(tabs) do Paint(entry) end
@@ -1937,6 +2166,7 @@ local function SkinPaperDollHeader(WSkin, modelBg, sidebarBg, fontSize)
             end
         end
     end
+    local r, g, b = WSkin.AccentBarColor()
     for i, name in ipairs(names) do
         local tab = _G["PaperDollSidebarTab" .. i]
         if tab then
@@ -1952,10 +2182,20 @@ local function SkinPaperDollHeader(WSkin, modelBg, sidebarBg, fontSize)
             local underline = tab:CreateTexture(nil, "OVERLAY")
             underline:SetSize(width, OnePixel(tab))
             underline:SetPoint("TOP", label, "BOTTOM", 0, -2)
+            underline:SetColorTexture(r, g, b, 1)
+            WSkin.RegisterAccentUnderline(underline)
             local entry = { tab = tab, label = label, width = width, underline = underline }
             tabs[#tabs + 1] = entry
             local function Repaint() Paint(entry) end
-            tab:HookScript("OnEnter", Repaint)
+            tab:HookScript("OnEnter", function(self)
+                Repaint()
+                local tooltip = OwnedSheetTooltip(self)
+                if not (tooltip and tooltip:IsShown()) then return end
+                local sidebar = PAPERDOLL_SIDEBARS and PAPERDOLL_SIDEBARS[i]
+                local disabledText = not self:IsEnabled() and self.disabledTooltip
+                    and GetValueOrCallFunction(self, "disabledTooltip")
+                ShowSheetTooltip(self, sidebar and sidebar.name or name, disabledText)
+            end)
             tab:HookScript("OnLeave", Repaint)
             tab:HookScript("OnEnable", Repaint)
             tab:HookScript("OnDisable", Repaint)
@@ -1963,7 +2203,6 @@ local function SkinPaperDollHeader(WSkin, modelBg, sidebarBg, fontSize)
     end
     hooksecurefunc("PaperDollFrame_UpdateSidebarTabLayout", Layout)
     hooksecurefunc("PaperDollFrame_UpdateSidebarTabs", Sync)
-    EllesmereUI.RegAccent({ type = "callback", fn = Sync })
     Layout()
     Sync()
 end
@@ -2526,9 +2765,20 @@ local function HookEquipmentFlyout(pane, WSkin)
 end
 
 local function SkinPickerDropdown(dropdown, WSkin)
+    if dropdown:IsForbidden() or dropdown:IsProtected() then return end
     WSkin.Dropdown(dropdown)
     if not dropdown.OnMenuOpened or not dropdown.OnMenuClosed then return end
     dropdown:SetMenuAnchor(AnchorUtil.CreateAnchor("TOPLEFT", dropdown, "BOTTOMLEFT", 0, 0))
+    if dropdown.GenerateMenu and dropdown.GetMenuDescription then
+        hooksecurefunc(dropdown, "GenerateMenu", function(self)
+            if InCombatLockdown() or self:IsProtected() then return end
+            local description = self:GetMenuDescription()
+            if not description then return end
+            local width = self:GetWidth()
+            description:SetMinimumWidth(width)
+            description:SetMaximumWidth(width)
+        end)
+    end
     local edge = CreateFrame("Frame", nil, dropdown)
     local theme = WSkin.Theme
     local fill = WSkin.SolidTex(edge, "BACKGROUND", theme.bgR, theme.bgG, theme.bgB, 1)
@@ -2603,12 +2853,14 @@ local function SkinPickerDropdown(dropdown, WSkin)
             end
         end
         edge:ClearAllPoints()
-        edge:SetPoint("TOPLEFT", dropdown)
-        edge:SetPoint("BOTTOMRIGHT", menu)
+        -- Keep the border off the pooled menu frame, whose bounds reset on release.
+        local height = menu:GetHeight() * menu:GetEffectiveScale() / edge:GetEffectiveScale()
+        edge:SetPoint("TOPLEFT", dropdown, "TOPLEFT")
+        edge:SetPoint("BOTTOMRIGHT", dropdown, "BOTTOMRIGHT", 0, -height)
         edge:SetFrameStrata(menu:GetFrameStrata())
         edge:SetFrameLevel(menu:GetFrameLevel())
         fill:SetPoint("TOPLEFT", dropdown, "BOTTOMLEFT")
-        fill:SetPoint("BOTTOMRIGHT", menu)
+        fill:SetPoint("BOTTOMRIGHT", edge)
         edge:Show()
         PaintBorder()
     end)
@@ -2619,7 +2871,9 @@ local function SkinPickerDropdown(dropdown, WSkin)
     end)
     hooksecurefunc(dropdown, "OnMenuClosed", function(_, closed)
         WSkin.GetFFD(closed).embeddedDropdownMenu = nil
-        if closed == menu then menu = nil end
+        if closed ~= menu then return end
+        menu = nil
+        edge:Hide()
         Refresh()
     end)
     PaintBorder()
@@ -2630,21 +2884,24 @@ local function HookEquipmentSkin(WSkin, sheet)
     local pane = _G.PaperDollFrame.EquipmentManagerPane
     if not pane then return end
     local popup = _G.GearManagerPopupFrame
-    local surfaces, stock, extras, pickerFonts = {}, {}, {}, {}
+    local paneSkin = { surfaces = {}, stock = {}, extras = {} }
+    local pickerSkin = { surfaces = {}, stock = {} }
+    local pickerFonts = {}
     local active, setScroll, paneBuilt, popupBuilt, setFlyout, setPickerScroll, refreshPickerIcons, pickerShell
-    local paintPickerDropdown
+    local paintPickerDropdown, flyoutActive
     local Update
 
-    local function SaveArt(region)
+    local function SaveArt(skin, region)
+        local stock = skin.stock
         if region and stock[region] == nil then stock[region] = region:GetAlpha() end
         if region and active then region:SetAlpha(0) end
     end
-    local function SaveTextures(owner, keep)
+    local function SaveTextures(skin, owner, keep)
         if not owner then return end
         for _, region in ipairs({ owner:GetRegions() }) do
-            if region ~= keep and region:IsObjectType("Texture") then SaveArt(region) end
+            if region ~= keep and region:IsObjectType("Texture") then SaveArt(skin, region) end
         end
-        SaveArt(owner.NineSlice)
+        SaveArt(skin, owner.NineSlice)
     end
 
     -- The cards and footer buttons share horizontal pixels, with native heights.
@@ -2740,7 +2997,7 @@ local function HookEquipmentSkin(WSkin, sheet)
         sep:SetVertexColor(color.r, color.g, color.b, 1)
     end
 
-    local function Box(owner, bounds, button)
+    local function Box(skin, owner, bounds, button)
         local host = CreateFrame("Frame", nil, owner)
         host:SetAllPoints(bounds or owner)
         host:EnableMouse(false)
@@ -2749,7 +3006,7 @@ local function HookEquipmentSkin(WSkin, sheet)
         local theme = WSkin.Theme
         fill:SetColorTexture(theme.bgR, theme.bgG, theme.bgB, theme.bgA)
         local surface = { host = host, fill = fill }
-        surfaces[#surfaces + 1] = surface
+        skin.surfaces[#skin.surfaces + 1] = surface
         if button then
             surface.button = owner
             local hover = host:CreateTexture(nil, "ARTWORK")
@@ -2890,15 +3147,15 @@ local function HookEquipmentSkin(WSkin, sheet)
         end
     end
 
-    local function Button(owner, widthAdjustment, verticalOffset, spanEquipButtons)
+    local function Button(skin, owner, widthAdjustment, verticalOffset, spanEquipButtons)
         if not owner or owner:IsProtected() then return end
-        SaveTextures(owner)
-        SaveArt(owner.StateTexture)
-        SaveArt(owner:GetNormalTexture())
-        SaveArt(owner:GetPushedTexture())
-        SaveArt(owner:GetDisabledTexture())
-        SaveArt(owner:GetHighlightTexture())
-        local surface = Box(owner, nil, true)
+        SaveTextures(skin, owner)
+        SaveArt(skin, owner.StateTexture)
+        SaveArt(skin, owner:GetNormalTexture())
+        SaveArt(skin, owner:GetPushedTexture())
+        SaveArt(skin, owner:GetDisabledTexture())
+        SaveArt(skin, owner:GetHighlightTexture())
+        local surface = Box(skin, owner, nil, true)
         local label = owner.Text or owner:GetFontString()
         if not label then
             for _, region in ipairs({ owner:GetRegions() }) do
@@ -2955,13 +3212,13 @@ local function HookEquipmentSkin(WSkin, sheet)
         end
         for _, art in ipairs({ row:GetRegions() }) do
             local atlas = art.GetAtlas and art:GetAtlas()
-            if atlas == "UI-Character-Info-OutfitCard" or atlas == "UI-Character-Info-OutfitIcon-Frame" then SaveArt(art) end
+            if atlas == "UI-Character-Info-OutfitCard" or atlas == "UI-Character-Info-OutfitIcon-Frame" then SaveArt(paneSkin, art) end
         end
-        SaveArt(row.SelectedBar)
-        SaveArt(row.HighlightBar)
+        SaveArt(paneSkin, row.SelectedBar)
+        SaveArt(paneSkin, row.HighlightBar)
         local nativeIcon = row.icon
-        SaveArt(nativeIcon)
-        local surface = Box(row)
+        SaveArt(paneSkin, nativeIcon)
+        local surface = Box(paneSkin, row)
         surface.row = row
         surface.host:ClearAllPoints()
         surface.host:SetPoint("TOP", row, "TOP", 0, -4)
@@ -3030,7 +3287,7 @@ local function HookEquipmentSkin(WSkin, sheet)
         hover:SetAllPoints(selected)
         hover:SetColorTexture(1, 1, 1, 0.08)
         surface.body = { surface.fill, selected, hover }
-        extras[#extras + 1] = hover
+        paneSkin.extras[#paneSkin.extras + 1] = hover
         local hoverScroll = GetFFD(pane).statsHover
         if hoverScroll then
             row:HookScript("OnEnter", hoverScroll)
@@ -3046,18 +3303,18 @@ local function HookEquipmentSkin(WSkin, sheet)
     end)
 
     local function BuildPane()
-        paneBuilt = true
-        SaveArt(pane.Border)
-        setScroll = SkinSheetScroll(pane, WSkin, SaveTextures)
+        paneBuilt, paneSkin.active = true, true
+        SaveArt(paneSkin, pane.Border)
+        setScroll = SkinSheetScroll(pane, WSkin, function(owner) SaveTextures(paneSkin, owner) end)
         local bar = pane.ScrollBar
-        SaveArt(bar and bar.Back and bar.Back.Texture)
-        SaveArt(bar and bar.Forward and bar.Forward.Texture)
+        SaveArt(paneSkin, bar and bar.Back and bar.Back.Texture)
+        SaveArt(paneSkin, bar and bar.Forward and bar.Forward.Texture)
         local drop = 3
-        Button(pane.EquipSet, 9, -drop)
-        Button(pane.SaveSet, 9, -drop)
+        Button(paneSkin, pane.EquipSet, 9, -drop)
+        Button(paneSkin, pane.SaveSet, 9, -drop)
         local button = pane.NewSet
         -- The 44px list rows have a 2px gap and 4px insets on each end.
-        local newSet = Button(button, nil, 8 - drop, true)
+        local newSet = Button(paneSkin, button, nil, 8 - drop, true)
         if newSet then
             local plus = {}
             for i = 1, 2 do
@@ -3066,10 +3323,10 @@ local function HookEquipmentSkin(WSkin, sheet)
                 line:SetPoint("CENTER", button, "LEFT", 20, 0)
                 line:SetSize(i == 1 and 10 or 2, i == 1 and 2 or 10)
                 plus[i] = line
-                extras[#extras + 1] = line
+                paneSkin.extras[#paneSkin.extras + 1] = line
             end
             for _, art in ipairs({ pane:GetRegions() }) do
-                if art.GetAtlas and art:GetAtlas() == "UI-Character-Info-ScrollLine" then SaveArt(art) end
+                if art.GetAtlas and art:GetAtlas() == "UI-Character-Info-ScrollLine" then SaveArt(paneSkin, art) end
             end
             newSet.footerDivider = pane:CreateTexture(nil, "ARTWORK")
             local function TintNewSet()
@@ -3092,9 +3349,9 @@ local function HookEquipmentSkin(WSkin, sheet)
     end
 
     local function BuildPopup()
-        popupBuilt = true
         local box = popup.BorderBox
         if not box then return end
+        popupBuilt, pickerSkin.active = true, true
         local okay, cancel = box.OkayButton, box.CancelButton
         local footerGap = 16
         if sheet then
@@ -3102,15 +3359,15 @@ local function HookEquipmentSkin(WSkin, sheet)
             popup:SetPoint("TOPLEFT", sheet, "TOPRIGHT")
             popup:SetPoint("BOTTOMLEFT", sheet, "BOTTOMRIGHT")
         end
-        SaveTextures(popup)
+        SaveTextures(pickerSkin, popup)
         WSkin.Shell("charsheet", popup, { noBorder = true, noTopBar = true })
         pickerShell = WSkin.GetFFD(popup)
-        SaveTextures(box)
+        SaveTextures(pickerSkin, box)
         local edit = box.IconSelectorEditBox
         local dropdown = box.IconTypeDropdown or box.IconFilterDropdown
         if edit and not edit:IsProtected() then
-            SaveTextures(edit)
-            local surface = Box(edit)
+            SaveTextures(pickerSkin, edit)
+            local surface = Box(pickerSkin, edit)
             surface.font = function() if active then WSkin.Font(edit) end end
         end
         local icons = {}
@@ -3119,8 +3376,8 @@ local function HookEquipmentSkin(WSkin, sheet)
             if not icon or button:IsProtected() then return end
             local surface = icons[button]
             if not surface then
-                SaveTextures(button, icon)
-                surface = Box(button, icon)
+                SaveTextures(pickerSkin, button, icon)
+                surface = Box(pickerSkin, button, icon)
                 surface.square = true
                 local hover, flash = BuildSlotHover(button, icon)
                 local selected = button:CreateTexture(nil, "OVERLAY")
@@ -3171,10 +3428,10 @@ local function HookEquipmentSkin(WSkin, sheet)
             EllesmereUI.RegAccent({ type = "callback", fn = function() if active then headerFont() end end })
         end
         if grid and grid.ScrollBox and grid.ScrollBar then
-            setPickerScroll = SkinSheetScroll(grid, WSkin, SaveTextures, true)
+            setPickerScroll = SkinSheetScroll(grid, WSkin, function(owner) SaveTextures(pickerSkin, owner) end, true)
             local bar = grid.ScrollBar
-            SaveArt(bar.Back and bar.Back.Texture)
-            SaveArt(bar.Forward and bar.Forward.Texture)
+            SaveArt(pickerSkin, bar.Back and bar.Back.Texture)
+            SaveArt(pickerSkin, bar.Forward and bar.Forward.Texture)
             local gridInset = 21
             grid:ClearAllPoints()
             grid:SetPoint("TOPLEFT", popup, "TOPLEFT", gridInset, -97)
@@ -3191,6 +3448,11 @@ local function HookEquipmentSkin(WSkin, sheet)
             if dropdown and not dropdown:IsProtected() then
                 local _, _, _, _, y = dropdown:GetPoint()
                 dropdown:SetPoint("TOPRIGHT", box, "TOPLEFT", right, y or 0)
+                local label = box.IconSelectionText
+                if label then
+                    label:ClearAllPoints()
+                    label:SetPoint("BOTTOMLEFT", dropdown, "BOTTOMRIGHT", left - right, 0)
+                end
             end
         end
         refreshPickerIcons = WSkin.Debounce(function()
@@ -3206,11 +3468,27 @@ local function HookEquipmentSkin(WSkin, sheet)
         local dragContent = box.IconDragArea and box.IconDragArea.IconDragAreaContent
         PickerLabel(dragContent and dragContent.IconDragText)
         PickerLabel(dropdown and (dropdown.Text or dropdown:GetFontString()))
-        if Button(okay) and Button(cancel) then
+        if Button(pickerSkin, okay) and Button(pickerSkin, cancel) then
             cancel:ClearAllPoints()
             cancel:SetPoint("BOTTOMRIGHT", box, "BOTTOMRIGHT", -footerGap, footerGap)
             okay:ClearAllPoints()
             okay:SetPoint("RIGHT", cancel, "LEFT", -12, 0)
+        end
+    end
+
+    local function PaintVisibleSkin(skin)
+        if skin.active ~= active then
+            skin.active = active
+            for art, alpha in pairs(skin.stock) do art:SetAlpha(active and 0 or alpha) end
+            if skin.extras then
+                for _, extra in ipairs(skin.extras) do extra:SetShown(active) end
+            end
+        end
+        for _, surface in ipairs(skin.surfaces) do
+            if surface.layout then surface.layout() end
+            if surface.font then surface.font() end
+            if surface.row then PaintSelection(surface.row) end
+            Paint(surface)
         end
     end
 
@@ -3220,51 +3498,46 @@ local function HookEquipmentSkin(WSkin, sheet)
             return
         end
         local style = EllesmereUIDB and EllesmereUIDB.blizzWinBorderTexture
-        local enabled = not style or WSkin.IsModeTabBorderStyle(style)
-        if not enabled and active == enabled then return end
-        if active ~= enabled then
-            active = enabled
-            for art, alpha in pairs(stock) do art:SetAlpha(active and 0 or alpha) end
+        active = not style or WSkin.IsModeTabBorderStyle(style)
+        local paneVisible = pane:IsVisible()
+        local popupVisible = popup and popup:IsVisible()
+        if active and popupVisible and not popupBuilt and not popup:IsProtected() then BuildPopup() end
+        if sheet and popupVisible and popupBuilt and WSkin.SetWindowBorderDock(sheet, active and popup or nil) then
+            -- Docking refreshes the border, which calls this function again.
+            return
         end
-        if active then
-            if not setFlyout then setFlyout = HookEquipmentFlyout(pane, WSkin) end
-            if not paneBuilt and pane:IsVisible() then BuildPane() end
-            if not popupBuilt and popup and popup:IsVisible() and not popup:IsProtected() then BuildPopup() end
-            if paneBuilt and pane.ScrollBox and pane:IsVisible() then RefreshRows() end
+        if active and not setFlyout then setFlyout = HookEquipmentFlyout(pane, WSkin) end
+        local flyout = _G.EquipmentFlyoutFrame
+        if setFlyout and (flyoutActive ~= active or paneVisible or (flyout and flyout:IsVisible())) then
+            flyoutActive = active
+            setFlyout(active)
         end
-        if setScroll then setScroll(active) end
-        if pickerShell then
-            pickerShell.bg:SetShown(active)
-            pickerShell.bgOverlay:SetShown(active)
-            pickerShell.modernBg:SetShown(active)
+        if paneVisible then
+            if active and not paneBuilt then BuildPane() end
+            if paneBuilt then
+                if setScroll then setScroll(active) end
+                if active and pane.ScrollBox then RefreshRows() end
+                PaintVisibleSkin(paneSkin)
+            end
         end
-        if setPickerScroll then setPickerScroll(active) end
-        if paintPickerDropdown and active and popup:IsVisible() then paintPickerDropdown() end
-        if refreshPickerIcons and popup:IsVisible() then refreshPickerIcons() end
-        if setFlyout then setFlyout(active) end
-        for _, extra in ipairs(extras) do extra:SetShown(active) end
-        for _, font in ipairs(pickerFonts) do font() end
-        for row in pairs(rows) do PaintSelection(row) end
-        for _, surface in ipairs(surfaces) do
-            if surface.layout then surface.layout() end
-            if surface.font then surface.font() end
-            Paint(surface)
+        if popupVisible and popupBuilt then
+            if pickerShell then
+                pickerShell.bg:SetShown(active)
+                pickerShell.bgOverlay:SetShown(active)
+                pickerShell.modernBg:SetShown(active)
+            end
+            if setPickerScroll then setPickerScroll(active) end
+            if active then
+                if paintPickerDropdown then paintPickerDropdown() end
+                if refreshPickerIcons then refreshPickerIcons() end
+            end
+            for _, font in ipairs(pickerFonts) do font() end
+            PaintVisibleSkin(pickerSkin)
         end
     end
     pane:HookScript("OnShow", Update)
     if popup then
-        local function OpenPopup()
-            if not popup:IsVisible() then return end
-            Update()
-            if sheet and active and popupBuilt then WSkin.SetWindowBorderDock(sheet, popup) end
-        end
-        popup:HookScript("OnShow", function()
-            if InCombatLockdown() then
-                ns.CombatQueue.Defer("ForeverEquipmentPicker", OpenPopup)
-            else
-                OpenPopup()
-            end
-        end)
+        popup:HookScript("OnShow", Update)
         popup:HookScript("OnHide", function()
             if sheet and popupBuilt then WSkin.SetWindowBorderDock(sheet) end
         end)
@@ -3403,10 +3676,14 @@ local function SkinFrame()
     ns.ForeverSkinClose(close, topBar)
     local modelBg = ns.ForeverModelBackdrop(frame, topBar, _G.PaperDollFrame, frame.LeftPaneHost)
     local sidebarBg = SidebarPanel(frame, topBar)
-    local dividers = ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg)
+    local bottomTabs
+    if WantsBottomTabs() then bottomTabs = BuildBottomModeTabs(frame, WSkin) end
+    bottomTabsInstalled = bottomTabs ~= nil
+    local dividers = ns.ForeverBuildDividers(frame, topBar, modelBg, sidebarBg, nil, nil, bottomTabs)
     local equipment = HookEquipmentSkin(WSkin, frame)
     WSkin.SetWindowBorderDetails(frame, modelBg, sidebarBg, function(...)
         if dividers then dividers(...) end
+        if bottomTabs then bottomTabs(...) end
         if equipment then equipment() end
     end, true)
     SkinPaperDollHeader(WSkin, modelBg, sidebarBg, titleSize - 2)
@@ -3415,7 +3692,10 @@ local function SkinFrame()
     -- border on each, and the slot text beside them; both follow Blizzard's
     -- own slot refresh.
     LayoutGearSlots(frame, false)
-    for i = 1, #SLOTS do SkinSlot(SLOTS[i], Fade) end
+    for _, column in ipairs(SLOT_COLUMNS) do
+        for _, slotName in ipairs(column) do SkinSlot(slotName, Fade, column.anchor) end
+    end
+    hooksecurefunc(ItemUtil, "DisplayEquipSlotTooltip", AnchorSlotTooltip)
     BuildSlotText()
     local eyeBtn
     if topBar and slotOverlay then

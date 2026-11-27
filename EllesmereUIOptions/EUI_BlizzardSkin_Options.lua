@@ -1548,6 +1548,22 @@ initFrame:SetScript("OnEvent", function(self)
         return hf, h
     end
 
+    local function WSReloadPopup(message)
+        EllesmereUI:ShowConfirmPopup({
+            title       = "Reload Required",
+            message     = message,
+            confirmText = "Reload Now",
+            cancelText  = "Later",
+            reload      = true,
+        })
+    end
+
+    local function PromptForCharacterTabsReload()
+        if ns.ForeverBottomTabsNeedReload and ns.ForeverBottomTabsNeedReload() then
+            WSReloadPopup("Changing Character Sheet tabs requires a UI reload.")
+        end
+    end
+
     local function BuildCharacterSheetContent(parent, y)
         local W = EllesmereUI.Widgets
         local _, h
@@ -1946,6 +1962,25 @@ initFrame:SetScript("OnEvent", function(self)
                     },
                 })
             end
+        end
+
+        if EllesmereUI.IS_FOREVER then
+            local tabsRow
+            tabsRow, h = W:DualRow(parent, y,
+                csGate({ type="toggle", text="Bottom Tabs",
+                  tooltip="Move the Character Sheet tabs to the bottom of the window.",
+                  disabled=function()
+                      return not ns.ForeverBottomTabsSupported(EllesmereUIDB and EllesmereUIDB.blizzWinBorderTexture)
+                  end,
+                  disabledTooltip="Glow and Shadow use the Character Sheet's side tabs.",
+                  getValue=function() return EllesmereUIDB and EllesmereUIDB.charSheetBottomTabs == true end,
+                  setValue=function(v)
+                      if not EllesmereUIDB then EllesmereUIDB = {} end
+                      EllesmereUIDB.charSheetBottomTabs = v
+                      PromptForCharacterTabsReload()
+                  end }),
+                EllesmereUI.BlankRowCfg());  y = y - h
+            AttachDisabledOverlay(tabsRow)
         end
 
         _, h = W:Spacer(parent, y, 10);  y = y - h
@@ -2905,16 +2940,6 @@ initFrame:SetScript("OnEvent", function(self)
 
     local _wsExpanded = {}
     local _wsApplyAllStyle = "eui"  -- set-all dropdown pick (session-only)
-
-    local function WSReloadPopup(message)
-        EllesmereUI:ShowConfirmPopup({
-            title       = "Reload Required",
-            message     = message,
-            confirmText = "Reload Now",
-            cancelText  = "Later",
-            reload      = true,
-        })
-    end
 
     -- Style vocabulary shared by the per-card dropdowns and the set-all row.
     local WS_STYLE_VALUES = { eui = "EllesmereUI", off = "Blizz Default" }
@@ -4171,6 +4196,7 @@ initFrame:SetScript("OnEvent", function(self)
                   SetWindowBorderStyle(v)
                   refreshBorder()
                   EllesmereUI:RefreshPage(true)
+                  PromptForCharacterTabsReload()
               end },
             BorderSizeSlider("blizzWin", "Border Size", borderOff, refreshBorder, "Choose a custom Border Style"))
         y = y - h
@@ -5292,7 +5318,7 @@ initFrame:SetScript("OnEvent", function(self)
                     "themedCharacterSheet", "themedInspectSheet", "statCategoryUseColor",
                     "showItemLevel", "showUpgradeTrack", "showGems", "showEnchants",
                     "charSheetSocketPanel", "charSheetIconZoom", "charSheetEnchantNames",
-                    "charSheetEnchantSize", "inspectShowEnchants", "inspectShowItemLevel",
+                    "charSheetEnchantSize", "charSheetBottomTabs", "inspectShowEnchants", "inspectShowItemLevel",
                     "inspectShowUpgradeTrack", "merchantShowAsList", "merchantListRowHeight",
                     "merchantShowItemLevel", "merchantBulkBuy", "merchantExpand", "merchantCols", "merchantRows",
                     "merchantMarkOwned", "merchantHideKnown",
